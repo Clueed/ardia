@@ -52,22 +52,16 @@ All in `apps/browser/macos/Fork.xcconfig`:
 
 - **Bundle ID `com.clueed.ardia`**, so its profile, settings and caches
   (`~/Library/Application Support/com.clueed.ardia`) stay apart from an official Ardia on the same Mac.
-- **Update feed** at this fork's latest GitHub release. Until `ARDIA_UPDATE_PUBLIC_KEY` is set, the updater is off,
-  and official updates can never replace the fork.
+- **No updater.** `Info.plist` takes its feed and key from `ARDIA_UPDATE_FEED_URL` and `ARDIA_UPDATE_PUBLIC_KEY`,
+  which the fork leaves unset, so it never checks for updates and an official release can't replace it.
 - **Ad hoc signing** (`AdHoc.xcconfig`): no Apple team needed. Passkeys and the shared keychain groups don't work.
 
 Telemetry is opt-in and off unless you tick it during onboarding; leave it unticked.
 
-## Turn on updates
+## Update
 
-1. Make a signing key: `apps/browser/macos/Pods/Sparkle/bin/generate_keys --account ardia-fork`. It keeps the
-   private key in the login keychain and prints the public one.
-2. Back up the private key outside the repo:
-   `generate_keys --account ardia-fork -x ~/ardia-fork-sparkle.key`, then store it in a password manager.
-3. Put the public key in `ARDIA_UPDATE_PUBLIC_KEY` in `Fork.xcconfig` and commit it.
-4. For each release: raise `CURRENT_PROJECT_VERSION`, build, then
-   `generate_appcast --account ardia-fork <folder with Ardia-Fork.zip>` and upload the zip and `appcast.xml` to a
-   GitHub release on this fork.
+Take upstream's changes, run `scripts/fork/build.sh`, quit the app and copy the new `Ardia Fork.app` over the old
+one. The profile lives outside the app, so nothing is lost.
 
 ## Known gaps
 

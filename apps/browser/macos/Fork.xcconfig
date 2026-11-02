@@ -2,5 +2,3 @@
 
 PRODUCT_BUNDLE_IDENTIFIER = com.clueed.ardia
 AC_UPDATE_CHANNEL = stable
-ARDIA_UPDATE_FEED_URL = https:/$()/github.com/Clueed/ardia/releases/latest/download/appcast.xml
-ARDIA_UPDATE_PUBLIC_KEY =

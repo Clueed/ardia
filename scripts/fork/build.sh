@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds the fork: a Release Ardia.app with the fork's bundle ID and update feed (apps/browser/macos/Fork.xcconfig),
+# Builds the fork: a Release Ardia.app with the fork's bundle ID and no updater (apps/browser/macos/Fork.xcconfig),
 # signed ad hoc, on the prebuilt engine from the upstream releases. No Chromium build, no notarization.
 #
 #   scripts/fork/build.sh [<output dir>]    (default: dist/fork)
