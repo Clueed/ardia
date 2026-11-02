@@ -20,7 +20,7 @@ import type { ClearSiteDataResult, SiteSettings, SiteSettingType, SiteSettingVal
 import type { LinkRoute, TabStripCommand, TabStripTransaction } from "../tabs";
 import type { PageCookie, PageEngine, PasskeyAccess } from "../webkit";
 import type { DisplayMediaSource } from "../pageTypes";
-import type { CliConnectReply, CliConnectRequest, CliRename, CliSession, GatewayCloseTab, GatewayOpenTab, GatewayProfile, GatewayStatus } from "../gateway";
+import type { CliConnectReply, CliConnectRequest, CliRename, CliSession, GatewayCloseTab, GatewayOpenTab, GatewayProfile, GatewayRun, GatewayRunReply, GatewayStatus } from "../gateway";
 
 type Profile = { profile: string };
 type Done = Record<string, never> | null;
@@ -48,6 +48,7 @@ export type EngineCalls = {
   "gateway.connectReply": [CliConnectReply, null];
   "gateway.endSessions": [Profile, null];
   "gateway.tabOpened": [{ request: string; tabId: string | null }, null];
+  "gateway.runReply": [GatewayRunReply, null];
 
   "engine.setCliControl": [{ on: boolean }, CliControlStatus];
   "engine.setCliActiveTab": [{ tabId: string | null }, CliControlStatus];
@@ -206,6 +207,7 @@ export type EngineEvents = {
   "gateway.rename": CliRename;
   "gateway.openTab": GatewayOpenTab;
   "gateway.closeTab": GatewayCloseTab;
+  "gateway.run": GatewayRun;
   "tabs.strips": TabStripTransaction;
   "downloads.changed": Download;
   "permissions.requested": PermissionRequest;

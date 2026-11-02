@@ -27,6 +27,10 @@ public class GatewayModule: Module {
       Gateway.shared.endSessions(profile: args.profile)
       reply.ok()
     },
+    "runReply": { args, reply in
+      Gateway.shared.runReply(request: try args.text("request"), result: args.values["result"], error: args.values["error"] as? [String: Any])
+      reply.ok()
+    },
     "tabOpened": { args, reply in
       Gateway.shared.tabOpened(request: try args.text("request"), tabId: try args.optionalText("tabId"))
       reply.ok()

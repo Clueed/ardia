@@ -101,11 +101,15 @@ is a 404 with no JSON body. The gateway checks the token, counts the call as ses
 `{request, profile, command, arg, window}` (the app profile id, never the token) as `gateway.run`; JS answers
 `runReply` within 30 s, else `failed`.
 
-JS runs it scoped to the session's profile (`planRun` with the profile): the target window (given, or the last
-focused) must be showing that profile (an agent profile: the Agents page with one of its tabs shown), commands that
-act on tabs act only on that profile's tabs, and only an explicit allowlist of scoped commands runs. Anything that
-can't be kept to one profile (app-wide settings, quit, window management that would move other profiles' tabs,
-opening Settings, switching to another profile, private windows) and anything unknown is `refused`.
+JS runs it scoped to the session's profile (`planSessionRun` in `state/automation/sessionRun.ts`): the target window
+(given, or the most recently focused one showing that profile) must be showing that profile (an agent profile: the
+Agents page with one of its tabs shown), else `no_window`; commands that act on tabs act only on that profile's tabs,
+and only an explicit allowlist of scoped commands runs (`SESSION_COMMANDS`: newTab, closeTab, reload, forceReload,
+stop, back, forward, nextTab, previousTab, selectTab, selectLastTab, duplicateTab, moveTabUp, moveTabDown, toggleMute,
+zoomIn, zoomOut, zoomReset, findInPage, findNext, findPrevious). `newTab` needs no shown tab: it opens a tab of that
+profile in the given or last focused window, in the background for an agent profile. Anything that can't be kept to
+one profile (app-wide settings, quit, window management that would move other profiles' tabs, opening Settings,
+switching to another profile, private windows) and anything unknown is `refused`.
 
 This is more than the token path grants: the token path reaches web pages through an allowlist of CDP methods,
 while the socket reaches the browser's own commands (tabs, windows, sidebar, splits, groups, profiles' UI, sharing,

@@ -22,6 +22,7 @@ import { createAgentProfile } from "../profiles/agents";
 import { seedAgentExtensions } from "../extensions/agentExtensions";
 import { useCli } from "./cliControl";
 import { startGatewayTabs } from "./gatewayTabs";
+import { startSessionRuns } from "../automation/sessionRun";
 
 export type PendingConnect = { id: string; agent: string; profileId: string; profileName: string };
 
@@ -150,6 +151,7 @@ export function startCliConnect() {
     if (response.action === "allow" || response.action === "deny") answerConnect(id, response.action === "allow");
   });
   const pushShown = startGatewayTabs(controlOn);
+  startSessionRuns();
   const follow = (engineOn: boolean) => {
     if (engineOn === wanted) return;
     wanted = engineOn;

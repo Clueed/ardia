@@ -258,6 +258,8 @@ const cliStatus = (on: boolean | null): CliControlStatus =>
   on ? { state: "on", port: 0, connections: 0, generation: 0, file: "" } : { state: "off", connections: 0, generation: 0, file: "" };
 const cliControl = (on: boolean | null) => testGlobals.acTestCliControl?.(on) ?? cliStatus(on);
 
+export const gatewayRunReplies: CallArgs<"gateway.runReply">[] = [];
+
 export const cancelledDownloads: string[] = [];
 export const endedWebKitSessions: string[] = [];
 export const removedStagings: string[] = [];
@@ -325,6 +327,16 @@ const fakeModules = {
     },
   )),
   ArdiaWindows: domain("windows", { list: () => [], dev: () => "" }),
+  ArdiaGateway: domain("gateway", {
+    start: () => ({ state: "off" }),
+    stop: () => null,
+    profiles: () => null,
+    shownTabs: () => null,
+    connectReply: () => null,
+    endSessions: () => null,
+    tabOpened: () => null,
+    runReply: ({ profile: _profile, ...reply }) => (gatewayRunReplies.push(reply as CallArgs<"gateway.runReply">), null),
+  }),
   ArdiaDownloads: domain("downloads", {
     cancel: ({ id }) => (cancelledDownloads.push(id), null),
     pause: () => null,

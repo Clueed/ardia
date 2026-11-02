@@ -127,9 +127,10 @@ final class GatewayServer {
     return GatewayRequest(method: String(start[0]), path: components.path, query: query, headers: headers, leftover: leftover)
   }
 
-  static func respond(_ connection: NWConnection, status: Int, json: Any) {
-    let body = (try? JSONSerialization.data(withJSONObject: json, options: [.fragmentsAllowed])) ?? Data("{}".utf8)
-    let head = "HTTP/1.1 \(status) \(reason(status))\r\nContent-Type: application/json\r\nContent-Length: \(body.count)\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
+  static func respond(_ connection: NWConnection, status: Int, json: Any?) {
+    let body = json.map { (try? JSONSerialization.data(withJSONObject: $0, options: [.fragmentsAllowed])) ?? Data("{}".utf8) } ?? Data()
+    let type = json == nil ? "" : "Content-Type: application/json\r\n"
+    let head = "HTTP/1.1 \(status) \(reason(status))\r\n\(type)Content-Length: \(body.count)\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n"
     connection.send(content: Data(head.utf8) + body, isComplete: true, completion: .contentProcessed { _ in connection.cancel() })
   }
 
@@ -150,6 +151,7 @@ final class GatewayServer {
     case 405: "Method Not Allowed"
     case 409: "Conflict"
     case 429: "Too Many Requests"
+    case 500: "Internal Server Error"
     case 502: "Bad Gateway"
     case 504: "Gateway Timeout"
     default: "Error"

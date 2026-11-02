@@ -1,7 +1,4 @@
-import type { BrowserCommand } from "../../platform/commands";
-import type { BrowserState } from "../browser/store";
-import { automationCommands, automationDecision, isCatalogCommand, variantsOf } from "./automationCommands";
-import { eligibleKind, lastFocusedEligibleWindow } from "./automationWindows";
+import { automationCommands } from "./automationCommands";
 import { AUTOMATION_EVENTS, type AutomationEventName } from "./automationEvents";
 
 export const PROTOCOL = 1;
@@ -10,8 +7,9 @@ export type ErrorCode = "bad_request" | "unknown_method" | "unknown_command" | "
 export type MethodError = { code: ErrorCode; message: string };
 export type RequestId = number | string | null;
 export type ParsedRequest = { id: RequestId; method: string; params: Record<string, unknown> };
-export type RunPlan = { command: BrowserCommand; arg: string | null; windowId: string | null };
 export type Subscription = ReadonlySet<AutomationEventName>;
+
+export const SOCKET_RUN_REFUSED = "ardia run needs a session: run ardia connect, then pass --session.";
 
 export const failure = (code: ErrorCode, message: string) => ({ error: { code, message } satisfies MethodError });
 
@@ -36,36 +34,6 @@ export function parseRequest(line: string): ParsedRequest | { id: RequestId; err
 export const hello = (version: string) => ({ app: "Ardia", version, protocol: PROTOCOL });
 
 export const commands = automationCommands;
-
-const REFUSALS: Record<string, string> = {
-  endsApp: "ends the app",
-  changesEngine: "changes which engine shows a page",
-  leftOutSetting: "changes a setting config files can't set",
-  control: "touches control itself",
-  needsArgument: "needs an argument the socket doesn't pass",
-};
-
-export function planRun(s: Pick<BrowserState, "windows" | "windowOrder" | "ui">, params: Record<string, unknown>): RunPlan | { error: MethodError } {
-  const { command, arg, window } = params;
-  if (typeof command !== "string" || !command) return failure("bad_request", "run needs a command id.");
-  if (!isCatalogCommand(command)) return failure("unknown_command", `There's no command ${command}.`);
-  const decision = automationDecision(command);
-  if (decision !== "run") return failure("refused", `${command} ${REFUSALS[decision]}, so the ardia command can't run it.`);
-  if (arg !== undefined && arg !== null) {
-    const variants = variantsOf(command);
-    if (typeof arg !== "string" || !variants?.includes(arg)) {
-      return failure("bad_request", variants ? `${command} takes one of: ${variants.join(", ")}.` : `${command} takes no argument.`);
-    }
-  }
-  if (window !== undefined && window !== null) {
-    if (typeof window !== "string" || !eligibleKind(s, window)) return failure("no_window", `There's no window ${String(window)} the ardia command can use.`);
-    return { command, arg: (arg as string | null | undefined) ?? null, windowId: window };
-  }
-  const target = lastFocusedEligibleWindow(s);
-  if (target) return { command, arg: (arg as string | null | undefined) ?? null, windowId: target };
-  if (s.windowOrder.length === 0) return { command, arg: (arg as string | null | undefined) ?? null, windowId: null };
-  return failure("no_window", "No window the ardia command can use is open.");
-}
 
 const KNOWN_EVENTS: ReadonlySet<string> = new Set(AUTOMATION_EVENTS);
 

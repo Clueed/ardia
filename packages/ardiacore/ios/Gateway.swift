@@ -10,6 +10,8 @@ final class Gateway {
   private static let openDeadline: TimeInterval = 10
   private static let maxPending = 16
   private static let maxOpensPerSession = 4
+  private static let runDeadline: TimeInterval = 30
+  private static let runStatus: [String: Int] = ["bad_request": 400, "unknown_command": 404, "refused": 403, "no_window": 409, "failed": 500]
   private static let fileName = "ArdiaGateway.json"
 
   let queue = DispatchQueue(label: "ardia.gateway")
@@ -27,6 +29,7 @@ final class Gateway {
   private var requests: [String: GatewayConnect] = [:]
   private var sessions: [GatewaySession] = []
   private var opens: [String: (session: GatewaySession, deadline: Date, done: (String?) -> Void)] = [:]
+  private var runs: [String: (Int, Any?) -> Void] = [:]
   private var quitObserver: NSObjectProtocol?
 
   private var chromiumDirectory: String { ArdiaHost.dataDirectory }
@@ -145,6 +148,8 @@ final class Gateway {
     for (id, connect) in requests where connect.state == .pending { emit("gateway.connectCancel", ["request": id]) }
     requests = [:]
     for open in opens.values { open.done(nil) }
+    for answer in runs.values { answer(500, ["error": "failed", "message": "Control is off."]) }
+    runs = [:]
     opens = [:]
     lateOpens = [:]
     timer?.cancel()
@@ -232,7 +237,7 @@ final class Gateway {
     route(request) { status, body in GatewayServer.respond(connection, status: status, json: body) }
   }
 
-  private func route(_ request: GatewayRequest, reply: @escaping (Int, Any) -> Void) {
+  private func route(_ request: GatewayRequest, reply: @escaping (Int, Any?) -> Void) {
     let token = request.query["token"] ?? ""
     let control = GatewayTokens.equal(token, controlToken)
     let session = control ? nil : sessions.first { GatewayTokens.equal(token, $0.token) }
@@ -249,12 +254,16 @@ final class Gateway {
       reply(200, [String: Any]())
     case ("/ardia/rename", false, let session?):
       rename(session, request.query["name"], reply: reply)
+    case ("/ardia/run", false, let session?):
+      run(session, request.query, reply: reply)
+    case ("/ardia/run", _, _):
+      reply(404, nil)
     default:
       reply(404, ["error": "not-found"])
     }
   }
 
-  private func connect(_ query: [String: String], reply: (Int, Any) -> Void) {
+  private func connect(_ query: [String: String], reply: (Int, Any?) -> Void) {
     if let id = query["request"] {
       guard let connect = requests[id] else { return reply(200, ["state": "expired"]) }
       if query["cancel"] == "1" {
@@ -300,7 +309,33 @@ final class Gateway {
     reply(200, ["request": id])
   }
 
-  private func rename(_ session: GatewaySession, _ raw: String?, reply: (Int, Any) -> Void) {
+  func runReply(request: String, result: Any?, error: [String: Any]?) {
+    queue.async { [self] in
+      guard let answer = runs.removeValue(forKey: request) else { return }
+      guard let error else { return answer(200, ["result": result ?? NSNull()]) }
+      let code = error["code"] as? String ?? "failed"
+      answer(Self.runStatus[code] ?? 500, ["error": Self.runStatus[code] == nil ? "failed" : code, "message": error["message"] as? String ?? ""])
+    }
+  }
+
+  private func run(_ session: GatewaySession, _ query: [String: String], reply: @escaping (Int, Any?) -> Void) {
+    guard let command = query["command"], !command.isEmpty else { return reply(400, ["error": "bad_request", "message": "run needs a command id."]) }
+    var arg: Any = NSNull()
+    if let raw = query["arg"] {
+      guard let parsed = try? JSONSerialization.jsonObject(with: Data(raw.utf8), options: [.fragmentsAllowed]) else {
+        return reply(400, ["error": "bad_request", "message": "arg isn't JSON."])
+      }
+      arg = parsed
+    }
+    let id = GatewayTokens.random(bytes: 12)
+    runs[id] = reply
+    queue.asyncAfter(deadline: .now() + Self.runDeadline) { [weak self] in
+      self?.runs.removeValue(forKey: id)?(500, ["error": "failed", "message": "Ardia didn't answer in time."])
+    }
+    emit("gateway.run", ["request": id, "profile": session.profileId, "command": command, "arg": arg, "window": query["window"] ?? NSNull()])
+  }
+
+  private func rename(_ session: GatewaySession, _ raw: String?, reply: (Int, Any?) -> Void) {
     guard session.kind == "agent" else { return reply(403, ["error": "not-agent"]) }
     guard let name = GatewayNames.valid(raw) else { return reply(400, ["error": "bad-name"]) }
     if profiles.contains(where: { $0.id != session.profileId && GatewayNames.same($0.name, name) }) { return reply(409, ["error": "name-taken"]) }

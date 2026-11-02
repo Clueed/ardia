@@ -56,38 +56,18 @@ test("hello, unknown methods and malformed lines", async () => {
   assert.equal(stringId.id, "a");
 });
 
-test("run refuses what isn't automatable and accepts only catalog ids", async () => {
+test("run on the socket is always refused and runs nothing", async () => {
   fresh();
   await controlOn();
-  S().createWindow({ url: "https://a.example/" });
-  assert.equal(call("run", { command: "std:quit:" }).error.code, "unknown_command");
-  assert.equal(call("run", { command: "quit" }).error.code, "unknown_command");
-  assert.equal(call("run", { command: "togglePageEngine" }).error.code, "refused");
-  assert.equal(call("run", { command: "toggleJavaScriptFromAppleEvents" }).error.code, "refused");
-  assert.equal(S().settings.allowJavaScriptFromAppleEvents, false);
-  assert.equal(call("run", { command: "switchProfile", arg: "x" }).error.code, "refused");
-  assert.equal(call("run", { command: "setAppearance", arg: "purple" }).error.code, "bad_request");
-  assert.equal(call("run", {}).error.code, "bad_request");
-  assert.deepEqual(call("run", { command: "setAppearance", arg: "dark" }).result, { ok: true });
-  assert.equal(S().settings.appearance, "dark");
-});
-
-test("run targets an eligible window and never falls back", async () => {
-  fresh();
-  await controlOn();
-  const priv = S().createWindow({ kind: "private", url: "https://secret.example/" });
-  assert.equal(call("run", { command: "nextTab" }).error.code, "no_window");
   const w = S().createWindow({ url: "https://a.example/" });
-  const second = S().newTab(w, { url: "https://b.example/" });
+  S().newTab(w, { url: "https://b.example/" });
   S().activate(model.viewTabIds(S(), w)[0]);
-  assert.equal(call("run", { command: "nextTab", window: priv }).error.code, "no_window");
-  assert.equal(call("run", { command: "nextTab", window: "nope" }).error.code, "no_window");
-  assert.equal(model.activeTabId(S(), w), model.viewTabIds(S(), w)[0]);
-  assert.deepEqual(call("run", { command: "nextTab", window: w }).result, { ok: true });
-  assert.equal(model.activeTabId(S(), w), second);
-  S().setFocusedWindow(priv);
-  assert.deepEqual(call("run", { command: "previousTab" }).result, { ok: true });
-  assert.notEqual(model.activeTabId(S(), w), second);
+  const before = model.activeTabId(S(), w);
+  for (const params of [{ command: "setAppearance", arg: "dark" }, { command: "nextTab", window: w }, { command: "quit" }, {}]) {
+    assert.deepEqual(call("run", params).error, { code: "refused", message: "ardia run needs a session: run ardia connect, then pass --session." });
+  }
+  assert.notEqual(S().settings.appearance, "dark");
+  assert.equal(model.activeTabId(S(), w), before);
 });
 
 test("a request tagged with an old generation, or arriving after Stop, never runs", async () => {
@@ -204,7 +184,7 @@ test("tab.navigated comes from commits only, with sameDocument for in-page chang
   assert.deepEqual(Object.keys(events[0].data).sort(), ["profile", "sameDocument", "tabId", "title", "url", "windowId"]);
 });
 
-test("run shows the pill and the other methods don't", async () => {
+test("no socket method shows the pill", async () => {
   fresh();
   await controlOn();
   S().createWindow({ url: "https://a.example/" });
@@ -212,45 +192,9 @@ test("run shows the pill and the other methods don't", async () => {
   useCliIndicator.setState({ shown: false });
   call("windows");
   call("hello");
-  assert.equal(useCliIndicator.getState().shown, false);
   call("run", { command: "setAppearance", arg: "light" });
-  assert.equal(useCliIndicator.getState().shown, true);
-  S().updateSettings({ cliControl: false });
-  assert.equal(useCliIndicator.getState().shown, true);
-  useCli.setState({ server: { state: "off", connections: 0, generation: 2, file: "" } });
   assert.equal(useCliIndicator.getState().shown, false);
-});
-
-test("the pill shows for a socket run while CDP is external, and Stop hides it at once", async () => {
-  fresh();
-  await controlOn();
-  S().createWindow({ url: "https://a.example/" });
-  useCli.setState({ server: { state: "external", connections: 0, generation: 3, file: "" } });
-  useCliIndicator.setState({ shown: false });
-  call("run", { command: "setAppearance", arg: "dark" });
-  assert.equal(useCliIndicator.getState().shown, true);
   S().updateSettings({ cliControl: false });
-  assert.equal(useCliIndicator.getState().shown, false);
-});
-
-test("a Little Ardia target never falls back to a private window", async () => {
-  fresh();
-  await controlOn();
-  const priv = S().createWindow({ kind: "private", url: "https://secret.example/" });
-  S().newTab(priv, { url: "https://secret2.example/" });
-  const little = S().createWindow({ kind: "small", url: "https://c.example/" });
-  S().setFocusedWindow(priv);
-  const before = model.activeTabId(S(), priv);
-  assert.equal(call("run", { command: "nextTab", window: little }).error.code, "no_window");
-  assert.equal(call("run", { command: "nextTab" }).error.code, "no_window");
-  assert.equal(model.activeTabId(S(), priv), before);
-  const main = S().createWindow({ url: "https://a.example/" });
-  S().newTab(main, { url: "https://b.example/" });
-  S().setFocusedWindow(priv);
-  const mainBefore = model.activeTabId(S(), main);
-  assert.deepEqual(call("run", { command: "nextTab", window: little }).result, { ok: true });
-  assert.equal(model.activeTabId(S(), priv), before);
-  assert.notEqual(model.activeTabId(S(), main), mainBefore);
 });
 
 test("same-document navigations in quick succession all arrive, in order", async () => {
@@ -274,21 +218,4 @@ test("same-document navigations in quick succession all arrive, in order", async
     ["https://a.example/#two", true],
     ["https://a.example/next", false],
   ]);
-});
-
-test("the pill stays up until the run's reply is written", async () => {
-  fresh();
-  await controlOn();
-  S().createWindow({ url: "https://a.example/" });
-  useCli.setState({ server: { state: "external", connections: 0, generation: 4, file: "" } });
-  useCliIndicator.setState({ shown: false });
-  stub.controlSocket.holdWrites = true;
-  call("run", { command: "setAppearance", arg: "light" });
-  await new Promise((resolve) => setTimeout(resolve, 3200));
-  assert.equal(useCliIndicator.getState().shown, true);
-  stub.controlSocket.holdWrites = false;
-  stub.writeHeldReplies();
-  await new Promise((resolve) => setTimeout(resolve, 3200));
-  assert.equal(useCliIndicator.getState().shown, false);
-  S().updateSettings({ cliControl: false });
 });
