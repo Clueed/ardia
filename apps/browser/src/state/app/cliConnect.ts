@@ -153,15 +153,17 @@ export function startCliConnect() {
   const follow = (engineOn: boolean) => {
     if (engineOn === wanted) return;
     wanted = engineOn;
+    const attempt = ++attempts;
     void (engineOn ? startGateway() : stopGateway()).then(
       (status) => {
-        if (wanted !== engineOn) return;
+        if (attempt !== attempts) return;
         gatewayOn = engineOn && status?.state === "on";
         if (!gatewayOn) return void clearGateway();
         void pushProfiles(true);
         pushShown();
       },
       () => {
+        if (attempt !== attempts) return;
         gatewayOn = false;
         clearGateway();
       },
@@ -175,6 +177,7 @@ export function startCliConnect() {
 }
 
 let wanted = false;
+let attempts = 0;
 
 function clearGateway() {
   sentProfiles = null;

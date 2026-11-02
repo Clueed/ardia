@@ -1,6 +1,8 @@
 import Foundation
 
 final class GatewayUpstream: NSObject, URLSessionWebSocketDelegate {
+  static let maxMessage = 128 << 20
+
   private var session: URLSession!
   private var task: URLSessionWebSocketTask!
   private var closed = false
@@ -17,7 +19,7 @@ final class GatewayUpstream: NSObject, URLSessionWebSocketDelegate {
     operations.maxConcurrentOperationCount = 1
     session = URLSession(configuration: .ephemeral, delegate: self, delegateQueue: operations)
     task = session.webSocketTask(with: url)
-    task.maximumMessageSize = GatewaySocket.maxMessage
+    task.maximumMessageSize = Self.maxMessage
   }
 
   func start() {

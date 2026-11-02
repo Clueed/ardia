@@ -11,3 +11,5 @@ export type CliRename = { profile: string; name: string };
 export type CliConnectReply = { request: string; allow: true; profile: string } | { request: string; allow: false };
 
 export type GatewayOpenTab = { request: string; profile: string; url: string; background: boolean };
+
+export type GatewayCloseTab = { tabId: string; profile: string };

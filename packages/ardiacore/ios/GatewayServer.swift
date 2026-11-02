@@ -5,11 +5,15 @@ import Network
 final class GatewayServer {
   private static let headLimit = 16 << 10
   private static let headDeadline: TimeInterval = 10
+  private static let maxHeads = 32
+  private static let maxConnections = 256
   private static let socketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
   private let queue: DispatchQueue
   private var listener: NWListener?
   private(set) var port: UInt16 = 0
+  private var heads = 0
+  private var live = 0
   var onRequest: ((GatewayRequest, NWConnection) -> Void)?
 
   init(queue: DispatchQueue) {
@@ -17,6 +21,7 @@ final class GatewayServer {
   }
 
   func start(ready: @escaping (UInt16?) -> Void) {
+    stop()
     let parameters = NWParameters.tcp
     parameters.requiredLocalEndpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: .any)
     parameters.acceptLocalOnly = true
@@ -26,12 +31,13 @@ final class GatewayServer {
     listener.stateUpdateHandler = { [weak self, weak listener] state in
       guard let self, !reported else { return }
       switch state {
-      case .ready:
+      case .ready where listener != nil && listener === self.listener:
         reported = true
         self.port = listener?.port?.rawValue ?? 0
         ready(self.port)
-      case .failed, .cancelled:
+      case .ready, .failed, .cancelled:
         reported = true
+        listener?.cancel()
         ready(nil)
       default:
         break
@@ -48,9 +54,30 @@ final class GatewayServer {
   }
 
   private func accept(_ connection: NWConnection) {
+    guard heads < Self.maxHeads, live < Self.maxConnections else { return connection.cancel() }
+    heads += 1
+    live += 1
+    var counted = true
+    connection.stateUpdateHandler = { [weak self] state in
+      switch state {
+      case .cancelled, .failed:
+        guard counted else { return }
+        counted = false
+        self?.live -= 1
+      default:
+        break
+      }
+    }
     connection.start(queue: queue)
     var head: [UInt8] = []
-    var done = false
+    var finished = false
+    var done: Bool {
+      get { finished }
+      set {
+        if newValue && !finished { self.heads -= 1 }
+        finished = newValue
+      }
+    }
     queue.asyncAfter(deadline: .now() + Self.headDeadline) {
       if !done {
         done = true

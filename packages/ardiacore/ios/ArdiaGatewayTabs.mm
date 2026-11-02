@@ -28,8 +28,12 @@ constexpr NSTimeInterval kTargetInfoTimeout = 2.0;
               params:nil
              timeout:kTargetInfoTimeout
           completion:^(NSDictionary *result, NSString *error) {
+            ArdiaCoreProfile *profile = tab.profile;
             NSDictionary *info = [result[@"targetInfo"] isKindOfClass:NSDictionary.class] ? result[@"targetInfo"] : nil;
-            completion(info);
+            if (!info || !profile || profile.offTheRecord) return completion(nil);
+            NSMutableDictionary *owned = [info mutableCopy];
+            owned[@"ardiaProfile"] = ardia_host::ProfileName(profile);
+            completion(owned);
           }];
 }
 

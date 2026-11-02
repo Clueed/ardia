@@ -2,7 +2,8 @@ import Foundation
 import Network
 
 final class GatewaySocket {
-  static let maxMessage = 64 << 20
+  static let maxMessage = 16 << 20
+  static let maxControl = 125
 
   private let connection: NWConnection
   private var buffer: [UInt8]
@@ -44,31 +45,38 @@ final class GatewaySocket {
   }
 
   private func parse() {
-    while !closed, buffer.count >= 2 {
-      let fin = buffer[0] & 0x80 != 0
-      let opcode = buffer[0] & 0x0f
-      guard buffer[1] & 0x80 != 0, buffer[0] & 0x70 == 0 else { return close(code: 1002) }
-      var length = Int(buffer[1] & 0x7f)
-      var offset = 2
+    var offset = 0
+    defer {
+      if offset > 0 { buffer.removeFirst(min(offset, buffer.count)) }
+    }
+    while !closed, buffer.count - offset >= 2 {
+      let first = buffer[offset]
+      let second = buffer[offset + 1]
+      let fin = first & 0x80 != 0
+      let opcode = first & 0x0f
+      guard second & 0x80 != 0, first & 0x70 == 0 else { return close(code: 1002) }
+      var length = Int(second & 0x7f)
+      var header = 2
       if length == 126 {
-        guard buffer.count >= 4 else { return }
-        length = Int(buffer[2]) << 8 | Int(buffer[3])
-        offset = 4
+        guard buffer.count - offset >= 4 else { return }
+        length = Int(buffer[offset + 2]) << 8 | Int(buffer[offset + 3])
+        header = 4
       } else if length == 127 {
-        guard buffer.count >= 10 else { return }
+        guard buffer.count - offset >= 10 else { return }
         var long: UInt64 = 0
-        for i in 2..<10 { long = long << 8 | UInt64(buffer[i]) }
+        for i in 2..<10 { long = long << 8 | UInt64(buffer[offset + i]) }
         guard long <= UInt64(Self.maxMessage) else { return close(code: 1009) }
         length = Int(long)
-        offset = 10
+        header = 10
       }
+      if opcode & 0x8 != 0, !fin || length > Self.maxControl { return close(code: 1002) }
       guard length <= Self.maxMessage else { return close(code: 1009) }
-      let total = offset + 4 + length
-      guard buffer.count >= total else { return }
-      let mask = Array(buffer[offset..<offset + 4])
-      var payload = Array(buffer[offset + 4..<total])
-      for i in payload.indices { payload[i] ^= mask[i & 3] }
-      buffer.removeFirst(total)
+      let total = header + 4 + length
+      guard buffer.count - offset >= total else { return }
+      let maskAt = offset + header
+      var payload = Array(buffer[(maskAt + 4)..<(offset + total)])
+      for i in payload.indices { payload[i] ^= buffer[maskAt + (i & 3)] }
+      offset += total
       handle(opcode: opcode, fin: fin, payload: payload)
     }
   }

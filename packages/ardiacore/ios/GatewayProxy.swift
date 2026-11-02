@@ -1,7 +1,7 @@
 import Foundation
 
 final class GatewayProxy {
-  typealias Opener = (_ session: GatewaySession, _ url: String, _ background: Bool, _ done: @escaping (String?) -> Void) -> Void
+  typealias Opener = (_ session: GatewaySession, _ url: String, _ background: Bool, _ done: @escaping (String?) -> Void) -> Bool
 
   private struct Pending {
     let clientId: Any?
@@ -125,13 +125,15 @@ final class GatewayProxy {
     if params["forTab"] != nil { return refuse(id, child, "Target.createTarget for a tab") }
     guard let url = Self.destination(params["url"]) else { return refuse(id, child, "Target.createTarget to that URL") }
     let background = session.kind == "agent" || params["background"] as? Bool != false
-    open(session, url, background) { [weak self] target in
+    let accepted = open(session, url, background) { [weak self] target in
       guard let self, !self.closed else { return }
       guard let target else { return self.refuse(id, nil, "Target.createTarget", reason: "the tab didn't open in time") }
+      guard self.scope.inScope(target: target, key: self.key) else { return self.refuse(id, nil, "Target.createTarget", reason: "the tab opened outside this session's profile") }
       self.shown.insert(target)
       self.session?.created.append(target)
       self.send(client: ["id": id, "result": ["targetId": target]])
     }
+    if !accepted { refuse(id, nil, "Target.createTarget", reason: "too many tabs are opening at once") }
   }
 
   private func detach(_ child: String, parent: String?) {

@@ -5,7 +5,7 @@ const { AGENTS_PAGE, pageIdOf, ownerProfileOf, agentProfileIds } = await import(
 const { cliProfiles } = await import("../app/cliConnect.ts");
 const { extensionsProfileId } = await import("../extensions/store.ts");
 const { originalProfile } = await import("../windows/small.ts");
-const { openGatewayTab, shownTabsByProfile } = await import("../app/gatewayTabs.ts");
+const { closeGatewayTab, openGatewayTab, shownTabsByProfile } = await import("../app/gatewayTabs.ts");
 
 const S = () => useBrowser.getState();
 const PERSONAL = { id: "default", name: "Personal", color: "plum", icon: null, createdAt: 0 };
@@ -128,6 +128,16 @@ test("a gateway tab for an agent opens in the background of the last focused win
   assert.equal(S().tabs[tabId].windowId, w);
   assert.equal(page(w), "default", "the owner's page doesn't move");
   assert.equal(openGatewayTab({ profile: "nobody", url: "about:blank", background: true }), null);
+});
+
+test("a late gateway tab closes only when it belongs to the asking profile", () => {
+  const { agent, w } = setup();
+  const owner = S().windows[w].activeTabIds.default;
+  closeGatewayTab(owner, agent);
+  assert.ok(S().tabs[owner], "the owner's tab stays");
+  const late = openGatewayTab({ profile: agent, url: "https://agent.example/", background: true });
+  closeGatewayTab(late, agent);
+  assert.ok(!S().tabs[late]);
 });
 
 test("shown tabs are the focused windows' visible tabs per profile", () => {

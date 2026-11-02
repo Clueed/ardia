@@ -2,37 +2,62 @@ import Foundation
 
 final class GatewayScope {
   private static let probeDeadline: TimeInterval = 3
+  private static let reconnectDelays: [TimeInterval] = [0.5, 1, 2, 5, 10, 30]
 
   private let queue: DispatchQueue
   private var contextOfKey: [String: String] = [:]
   private var contexts: [String: String] = [:]
   private var monitor: GatewayUpstream?
   private var nextId = 0
+  private var engineSource: (() -> GatewayEngine?)?
+  private var reconnects = 0
+  private var generation = 0
 
   init(queue: DispatchQueue) {
     self.queue = queue
   }
 
-  func start(engine: GatewayEngine) {
+  func start(engine: GatewayEngine, reread: @escaping () -> GatewayEngine?) {
     stop()
-    guard let url = engine.url(path: engine.browser) else { return }
+    engineSource = reread
+    connect(engine)
+  }
+
+  func stop() {
+    generation += 1
+    engineSource = nil
+    reconnects = 0
+    monitor?.close()
+    monitor = nil
+    contexts = [:]
+    contextOfKey = [:]
+  }
+
+  private func connect(_ engine: GatewayEngine?) {
+    guard let engine, let url = engine.url(path: engine.browser) else { return reconnectLater() }
     let monitor = GatewayUpstream(url: url, queue: queue)
     self.monitor = monitor
+    monitor.onOpen = { [weak self] in self?.reconnects = 0 }
     monitor.onText = { [weak self] text in self?.observe(text) }
     monitor.onClose = { [weak self, weak monitor] in
       guard let self, self.monitor === monitor else { return }
       self.monitor = nil
+      self.reconnectLater()
     }
     monitor.start()
     send(monitor, "Target.setDiscoverTargets", ["discover": true])
     send(monitor, "Target.getTargets", [:])
   }
 
-  func stop() {
-    monitor?.close()
-    monitor = nil
-    contexts = [:]
-    contextOfKey = [:]
+  private func reconnectLater() {
+    guard engineSource != nil else { return }
+    let delay = Self.reconnectDelays[min(reconnects, Self.reconnectDelays.count - 1)]
+    reconnects += 1
+    let expected = generation
+    queue.asyncAfter(deadline: .now() + delay) { [weak self] in
+      guard let self, self.generation == expected, self.monitor == nil, let source = self.engineSource else { return }
+      self.connect(source())
+    }
   }
 
   func contextOf(target: String) -> String? { contexts[target] }
@@ -53,10 +78,20 @@ final class GatewayScope {
     return inScope(target: target, key: key)
   }
 
-  func learn(target: String, info: [String: Any], key: String) {
-    guard let context = info["browserContextId"] as? String else { return }
+  @discardableResult
+  func learn(target: String, info: [String: Any], key: String) -> Bool {
+    guard let context = info["browserContextId"] as? String, info["ardiaProfile"] as? String == key else { return false }
+    if let known = contextOfKey[key], known != context {
+      NSLog("[gateway] a tab reported another browser context for its profile; ignoring it")
+      return false
+    }
+    if contextOfKey.contains(where: { $0.key != key && $0.value == context }) {
+      NSLog("[gateway] two profiles reported the same browser context; ignoring it")
+      return false
+    }
     contexts[target] = context
     contextOfKey[key] = context
+    return true
   }
 
   func ensure(key: String, done: @escaping () -> Void) {
@@ -78,8 +113,7 @@ final class GatewayScope {
     DispatchQueue.main.async { [weak self] in
       ArdiaGatewayTabs.target(ofTab: tabId) { info in
         self?.queue.async {
-          guard let self, let info, let target = info["targetId"] as? String else { return done(nil) }
-          self.learn(target: target, info: info, key: key)
+          guard let self, let info, let target = info["targetId"] as? String, self.learn(target: target, info: info, key: key) else { return done(nil) }
           done(target)
         }
       }
@@ -90,7 +124,7 @@ final class GatewayScope {
     guard let tabId = tabs.first else { return queue.async(execute: done) }
     ArdiaGatewayTabs.target(ofTab: tabId) { [weak self] info in
       guard let self else { return }
-      if let info, let target = info["targetId"] as? String {
+      if let info, let target = info["targetId"] as? String, info["ardiaProfile"] as? String == key {
         self.queue.async {
           self.learn(target: target, info: info, key: key)
           done()

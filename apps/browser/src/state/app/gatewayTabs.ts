@@ -1,4 +1,4 @@
-import { gatewayTabOpened, onGatewayOpenTab, setGatewayShownTabs, type GatewayOpenTab } from "../../platform/gateway";
+import { gatewayTabOpened, onGatewayCloseTab, onGatewayOpenTab, setGatewayShownTabs, type GatewayOpenTab } from "../../platform/gateway";
 import { useBrowser, type BrowserState } from "../browser/store";
 import { activeTabId } from "../browser/model";
 import { isAgentProfile } from "../browser/agents";
@@ -26,6 +26,10 @@ export function openGatewayTab({ profile, url, background }: Omit<GatewayOpenTab
   return tabId || null;
 }
 
+export function closeGatewayTab(tabId: string, profile: string) {
+  if (useBrowser.getState().tabs[tabId]?.profileId === profile) useBrowser.getState().closeTabs([tabId]);
+}
+
 let sentShown = "";
 
 function pushShown(on: boolean) {
@@ -42,6 +46,7 @@ function pushShown(on: boolean) {
 
 export function startGatewayTabs(gatewayOn: () => boolean) {
   onGatewayOpenTab(({ request, ...open }) => quietly(gatewayTabOpened(request, openGatewayTab(open))));
+  onGatewayCloseTab(({ tabId, profile }) => closeGatewayTab(tabId, profile));
   useBrowser.subscribe((s, prev) => {
     if (s.windows !== prev.windows || s.ui.focusOrder !== prev.ui.focusOrder || s.tabs !== prev.tabs) pushShown(gatewayOn());
   });

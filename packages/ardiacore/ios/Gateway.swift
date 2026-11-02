@@ -9,12 +9,16 @@ final class Gateway {
   private static let idleLimit: TimeInterval = 30 * 60
   private static let openDeadline: TimeInterval = 10
   private static let maxPending = 16
+  private static let maxOpensPerSession = 4
   private static let fileName = "ArdiaGateway.json"
 
   let queue = DispatchQueue(label: "ardia.gateway")
   private lazy var server = GatewayServer(queue: queue)
   private lazy var scope = GatewayScope(queue: queue)
   private var running = false
+  private var starting = false
+  private var generation = 0
+  private var lateOpens: [String: String] = [:]
   private var controlToken = ""
   private var browserPath = ""
   private var timer: DispatchSourceTimer?
@@ -22,7 +26,7 @@ final class Gateway {
   private var shownTabs: [String: String] = [:]
   private var requests: [String: GatewayConnect] = [:]
   private var sessions: [GatewaySession] = []
-  private var opens: [String: (session: GatewaySession, done: (String?) -> Void)] = [:]
+  private var opens: [String: (session: GatewaySession, deadline: Date, done: (String?) -> Void)] = [:]
   private var quitObserver: NSObjectProtocol?
 
   private var chromiumDirectory: String { ArdiaHost.dataDirectory }
@@ -31,16 +35,31 @@ final class Gateway {
   func start(completion: @escaping ([String: Any]) -> Void) {
     queue.async { [self] in
       if running { return completion(status()) }
+      if starting { return completion(["state": "off", "reason": "already starting"]) }
       guard let engine = GatewayEngine.read(chromiumDirectory: chromiumDirectory) else { return completion(["state": "off", "reason": "the engine's control server isn't on"]) }
+      generation += 1
+      let attempt = generation
+      starting = true
       server.onRequest = { [weak self] request, connection in self?.handle(request, connection) }
       server.start { [self] port in
-        guard let port else { return completion(["state": "off", "reason": "couldn't listen"]) }
+        guard attempt == generation, starting else { return completion(["state": "off", "reason": "stopped while starting"]) }
+        starting = false
+        guard let port else {
+          server.stop()
+          return completion(["state": "off", "reason": "couldn't listen"])
+        }
         running = true
         controlToken = GatewayTokens.random()
-        browserPath = "/devtools/browser/" + GatewayTokens.random(bytes: 16)
-        scope.start(engine: engine)
+        browserPath = "/devtools/browser/" + UUID().uuidString
+        guard writeFile(port: port) else {
+          stopNow()
+          return completion(["state": "off", "reason": "couldn't write \(Self.fileName)"])
+        }
+        scope.start(engine: engine) { [weak self] in
+          guard let self else { return nil }
+          return GatewayEngine.read(chromiumDirectory: self.chromiumDirectory)
+        }
         startTimer()
-        writeFile(port: port)
         watchQuit()
         completion(status())
       }
@@ -49,6 +68,8 @@ final class Gateway {
 
   func stop(completion: (() -> Void)? = nil) {
     queue.async { [self] in
+      generation += 1
+      starting = false
       stopNow()
       completion?()
     }
@@ -78,7 +99,8 @@ final class Gateway {
     queue.async { [self] in
       guard var connect = requests[request], connect.state == .pending else { return }
       connect.settledAt = Date()
-      if allow, let chosen = profiles.first(where: { $0.id == profile }), connect.profileId == nil || connect.profileId == profile {
+      if allow, let chosen = profiles.first(where: { $0.id == profile }),
+        connect.newName == nil ? connect.profileId == profile : chosen.kind == "agent" && GatewayNames.same(chosen.name, connect.newName ?? "") {
         let session = GatewaySession(token: GatewayTokens.random(), id: GatewayTokens.random(bytes: 6), profile: chosen, agent: connect.agent)
         sessions.append(session)
         connect.state = .allowed
@@ -102,13 +124,20 @@ final class Gateway {
 
   func tabOpened(request: String, tabId: String?) {
     queue.async { [self] in
-      guard let open = opens.removeValue(forKey: request) else { return }
+      guard let open = opens.removeValue(forKey: request) else {
+        if let tabId, let profile = lateOpens.removeValue(forKey: request) { emit("gateway.closeTab", ["tabId": tabId, "profile": profile]) }
+        return
+      }
       guard let tabId else { return open.done(nil) }
-      resolveTab(tabId, key: open.session.key, until: Date().addingTimeInterval(Self.openDeadline), done: open.done)
+      resolveTab(tabId, key: open.session.key, until: open.deadline) { [weak self] target in
+        if target == nil { self?.emit("gateway.closeTab", ["tabId": tabId, "profile": open.session.profileId]) }
+        open.done(target)
+      }
     }
   }
 
   private func stopNow() {
+    server.stop()
     guard running else { return }
     running = false
     for session in sessions { session.end() }
@@ -117,6 +146,7 @@ final class Gateway {
     requests = [:]
     for open in opens.values { open.done(nil) }
     opens = [:]
+    lateOpens = [:]
     timer?.cancel()
     timer = nil
     scope.stop()
@@ -132,17 +162,21 @@ final class Gateway {
     }
   }
 
-  private func writeFile(port: UInt16) {
+  private func writeFile(port: UInt16) -> Bool {
     let body: [String: Any] = ["port": Int(port), "browser": browserPath, "token": controlToken, "pid": Int(getpid()), "generation": Int(Date().timeIntervalSince1970 * 1000)]
-    guard let data = try? JSONSerialization.data(withJSONObject: body) else { return }
+    guard let data = try? JSONSerialization.data(withJSONObject: body) else { return false }
     let temp = filePath + ".\(getpid()).tmp"
     unlink(temp)
     let descriptor = open(temp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
-    guard descriptor >= 0 else { return }
+    guard descriptor >= 0 else { return false }
     let written = data.withUnsafeBytes { write(descriptor, $0.baseAddress, data.count) }
-    fchmod(descriptor, 0o600)
-    close(descriptor)
-    if written != data.count || Darwin.rename(temp, filePath) != 0 { unlink(temp) }
+    let secured = fchmod(descriptor, 0o600) == 0
+    let closed = close(descriptor) == 0
+    guard written == data.count, secured, closed, Darwin.rename(temp, filePath) == 0 else {
+      unlink(temp)
+      return false
+    }
+    return true
   }
 
   private func startTimer() {
@@ -281,13 +315,18 @@ final class Gateway {
     scope.resolve(tab: tabId, key: session.key) { target in target.map(done) ?? fallback() }
   }
 
-  private func openTab(_ session: GatewaySession, _ url: String, _ background: Bool, _ done: @escaping (String?) -> Void) {
+  private func openTab(_ session: GatewaySession, _ url: String, _ background: Bool, _ done: @escaping (String?) -> Void) -> Bool {
+    guard opens.values.filter({ $0.session === session }).count < Self.maxOpensPerSession else { return false }
     let id = GatewayTokens.random(bytes: 12)
-    opens[id] = (session, done)
+    opens[id] = (session, Date().addingTimeInterval(Self.openDeadline), done)
     queue.asyncAfter(deadline: .now() + Self.openDeadline) { [weak self] in
-      self?.opens.removeValue(forKey: id)?.done(nil)
+      guard let self, let open = self.opens.removeValue(forKey: id) else { return }
+      self.lateOpens[id] = open.session.profileId
+      open.done(nil)
+      self.queue.asyncAfter(deadline: .now() + Self.requestLifetime) { self.lateOpens[id] = nil }
     }
     emit("gateway.openTab", ["request": id, "profile": session.profileId, "url": url, "background": background])
+    return true
   }
 
   private func resolveTab(_ tabId: String, key: String, until deadline: Date, done: @escaping (String?) -> Void) {
@@ -317,9 +356,9 @@ final class Gateway {
       let client = GatewaySocket(connection: connection, leftover: request.leftover)
       let upstream = GatewayUpstream(url: url, queue: queue)
       let proxy = GatewayProxy(session: session, client: client, upstream: upstream, scope: scope, page: page) { [weak self] session, url, background, done in
-        self?.openTab(session, url, background, done)
+        self?.openTab(session, url, background, done) ?? false
       }
-      proxy.onClose = { [weak session, weak proxy] in session?.proxies.removeAll { $0 === proxy } }
+      proxy.onClose = { [weak proxy] in session.proxies.removeAll { $0 === proxy } }
       session.proxies.append(proxy)
       proxy.start()
     }

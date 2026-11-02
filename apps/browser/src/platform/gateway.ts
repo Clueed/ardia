@@ -5,6 +5,7 @@ import {
   type CliConnectRequest,
   type CliRename,
   type CliSession,
+  type GatewayCloseTab,
   type GatewayOpenTab,
   type GatewayProfile,
 } from "@ardia/ardiacore";
@@ -24,3 +25,4 @@ export const onCliConnectCancel = (listener: (cancel: { request: string }) => vo
 export const onCliSessions = (listener: (sessions: { sessions: CliSession[] }) => void) => on("gateway.sessions", listener);
 export const onCliRename = (listener: (rename: CliRename) => void) => on("gateway.rename", listener);
 export const onGatewayOpenTab = (listener: (open: GatewayOpenTab) => void) => on("gateway.openTab", listener);
+export const onGatewayCloseTab = (listener: (close: GatewayCloseTab) => void) => on("gateway.closeTab", listener);
