@@ -150,10 +150,10 @@ export function SettingToggle({ anchor, description }: { anchor: SettingId & `${
 
 export const useSettingsProfile = (initial?: string | null) => useState(() => initial ?? currentSettings().defaultProfileId);
 
-export function ProfilePicker({ value, onChange }: { value: string; onChange: (profileId: string) => void }) {
+export function ProfilePicker({ value, onChange, extra = [] }: { value: string; onChange: (profileId: string) => void; extra?: { value: string; title: string }[] }) {
   const profiles = useProfiles();
-  if (profiles.length < 2) return null;
-  return <PopUp value={value} options={profiles.map((p) => ({ value: p.id, title: p.name }))} onChange={onChange} />;
+  if (profiles.length + extra.length < 2) return null;
+  return <PopUp value={value} options={[...profiles.map((p) => ({ value: p.id, title: p.name })), ...extra]} onChange={onChange} />;
 }
 
 const SECTION_HEADER = { flexDirection: "row", alignItems: "flex-end", marginTop: space.xxxl, marginBottom: space.m, paddingHorizontal: space.xxs } as const;

@@ -2,6 +2,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useBrowser, type BrowserState } from "../browser/store";
 import { engineProfile } from "../browser/model";
 import { focusedWindowOf } from "./ui";
+import { pageIdOf, pagerOrderOf } from "../browser/agents";
 
 export const useWindowUiOf = <T>(windowId: string, select: (ui: BrowserState["windowUi"][string] | undefined) => T): T =>
   useBrowser((s) => select(s.windowUi[windowId]));
@@ -33,9 +34,10 @@ export const useSidebarDockState = (windowId: string) =>
 export const useProfileNeighbours = (windowId: string) =>
   useBrowser(
     useShallow((s): [previous: boolean, next: boolean, multiple: boolean] => {
-      const w = s.windows[windowId];
-      const i = w && w.kind !== "private" ? s.profileOrder.indexOf(w.profileId) : -1;
-      return i < 0 ? [false, false, false] : [i > 0, i < s.profileOrder.length - 1, s.profileOrder.length > 1];
+      const order = pagerOrderOf(s.profileOrder);
+      const page = pageIdOf(s, s.windows[windowId]);
+      const i = page ? order.indexOf(page) : -1;
+      return i < 0 ? [false, false, false] : [i > 0, i < order.length - 1, order.length > 1];
     }),
   );
 

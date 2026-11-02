@@ -3,7 +3,8 @@ import { stepPager } from "../../platform/pager";
 import { confirm } from "../../platform/dialogs";
 import { focusWindow } from "../../platform/windows";
 import { chooseFromMenu, type ChoiceItem } from "../app/menuChoice";
-import { pageToProfile } from "../windows/profilePager";
+import { pagerOrder, pageToProfile } from "../windows/profilePager";
+import { AGENTS_PAGE, pageIdOf } from "./agents";
 import { profileNames, requestCreateProfile } from "../profiles/createProfileRequest";
 import { storeAction, useBrowser } from "./store";
 import { rootOf } from "../groups/groups";
@@ -177,14 +178,15 @@ export function moveTabToWindow(tabId: string, target: string | null) {
   if (windowId) focus(windowId);
 }
 
-export function switchProfile(windowId: string, profileId: string, animated = false) {
-  if (animated) pageToProfile(windowId, profileId);
-  else store().switchProfile(windowId, profileId);
+export function switchProfile(windowId: string, pageId: string, animated = false) {
+  if (animated) pageToProfile(windowId, pageId);
+  else if (pageId === AGENTS_PAGE) store().showAgentsPage(windowId);
+  else store().switchProfile(windowId, pageId);
 }
 
 export function cycleProfile(windowId: string, delta: 1 | -1) {
   if (!cycleTarget(windowId, delta)) return;
-  void stepPager(windowId, delta, true, store().profileOrder).then((ok) => ok || cycleFromStore(windowId, delta));
+  void stepPager(windowId, delta, true, pagerOrder(store())).then((ok) => ok || cycleFromStore(windowId, delta));
 }
 
 function cycleFromStore(windowId: string, delta: 1 | -1) {
@@ -194,10 +196,11 @@ function cycleFromStore(windowId: string, delta: 1 | -1) {
 
 function cycleTarget(windowId: string, delta: 1 | -1) {
   const s = store();
-  const w = s.windows[windowId];
-  if (!w || w.kind === "private" || s.profileOrder.length < 2) return null;
-  const i = s.profileOrder.indexOf(w.profileId);
-  return s.profileOrder[(i + delta + s.profileOrder.length) % s.profileOrder.length]!;
+  const order = pagerOrder(s);
+  const page = pageIdOf(s, s.windows[windowId]);
+  if (!page || order.length < 2) return null;
+  const i = order.indexOf(page);
+  return order[(i + delta + order.length) % order.length]!;
 }
 
 export function openUrls(urls: string[], windowId?: string | null) {

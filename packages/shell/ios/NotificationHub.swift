@@ -6,6 +6,7 @@ final class NotificationHub: NSObject, UNUserNotificationCenterDelegate {
 
   private var pending: [(String, String, [String: Any])] = []
   private static let dismissibleCategory = "ardia.dismissible"
+  private static let allowDenyCategory = "ardia.allowDeny"
 
   private var center: UNUserNotificationCenter { .current() }
 
@@ -13,6 +14,14 @@ final class NotificationHub: NSObject, UNUserNotificationCenterDelegate {
     center.delegate = self
     center.setNotificationCategories([
       UNNotificationCategory(identifier: Self.dismissibleCategory, actions: [], intentIdentifiers: [], options: [.customDismissAction]),
+      UNNotificationCategory(
+        identifier: Self.allowDenyCategory,
+        actions: [
+          UNNotificationAction(identifier: "allow", title: "Allow", options: []),
+          UNNotificationAction(identifier: "deny", title: "Deny", options: [.destructive]),
+        ],
+        intentIdentifiers: [],
+        options: [.customDismissAction]),
     ])
   }
 
@@ -54,6 +63,7 @@ final class NotificationHub: NSObject, UNUserNotificationCenterDelegate {
     if !options.silent { content.sound = .default }
     if let origin = options.origin { content.threadIdentifier = origin }
     if options.dismissible { content.categoryIdentifier = Self.dismissibleCategory }
+    if options.allowDeny { content.categoryIdentifier = Self.allowDenyCategory }
     let info: [String: Any?] = ["tabId": options.tabId, "windowId": options.windowId, "origin": options.origin, "data": options.data]
     content.userInfo = info.compactMapValues { $0 }
 
@@ -101,6 +111,7 @@ final class NotificationHub: NSObject, UNUserNotificationCenterDelegate {
     let action: String? = switch response.actionIdentifier {
     case UNNotificationDefaultActionIdentifier: "click"
     case UNNotificationDismissActionIdentifier: "close"
+    case "allow", "deny": response.actionIdentifier
     default: nil
     }
     DispatchQueue.main.async { [self] in

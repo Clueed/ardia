@@ -21,6 +21,7 @@ import { createTabsSlice, type TabsSlice } from "../tabs/tabsSlice";
 import { settle, SettleDidNotConverge } from "./settle";
 import { transactional } from "./transaction";
 import type { BrowserWindow, Tab } from "./types";
+import { isAgent } from "./agents";
 import { createUiSlice, type UiSlice } from "../windows/ui";
 import { createDownloadsSlice, type DownloadsSlice } from "../downloads/downloadsSlice";
 import { createWindowsSlice, type WindowsSlice } from "../windows/windows";
@@ -120,13 +121,12 @@ export const useBrowser = create<BrowserState>()(transactions.middleware(batched
   hydrate(data) {
     const [set, get] = a;
     const s = get();
-    const profiles = data.profiles && Object.keys(data.profiles).length ? data.profiles : { [DEFAULT_PROFILE.id]: DEFAULT_PROFILE };
-    const profileOrder = [
-      ...(data.profileOrder ?? []).filter((id) => profiles[id]),
-      ...Object.keys(profiles).filter((id) => !data.profileOrder?.includes(id)),
-    ];
+    const savedProfiles = data.profiles ?? {};
+    const profiles = Object.values(savedProfiles).some((p) => !isAgent(p)) ? savedProfiles : { ...savedProfiles, [DEFAULT_PROFILE.id]: DEFAULT_PROFILE };
+    const owned = Object.keys(profiles).filter((id) => !isAgent(profiles[id]));
+    const profileOrder = [...(data.profileOrder ?? []).filter((id) => owned.includes(id)), ...owned.filter((id) => !data.profileOrder?.includes(id))];
     const settings = parseSettings(data.settings);
-    if (!profiles[settings.defaultProfileId]) settings.defaultProfileId = profileOrder[0]!;
+    if (!owned.includes(settings.defaultProfileId)) settings.defaultProfileId = profileOrder[0]!;
 
     notePinChoices(data.pinChoices ?? {});
     const rawWindows = data.windows ?? {};

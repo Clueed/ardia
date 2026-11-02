@@ -5,6 +5,7 @@ import { create } from "zustand";
 import { useBrowser, type BrowserState } from "../browser/store";
 import { activeTabId, engineProfile, incognitoOriginal, isIncognitoProfile, privateSession } from "../browser/model";
 import { shownPageId } from "../peek/peek";
+import { AGENTS_PAGE, isAgentProfile, showsAgentsPage } from "../browser/agents";
 import { isTabReady } from "../tabs/pageState";
 
 export type { ActionState, InstalledExtension } from "../../platform/extensions";
@@ -53,8 +54,9 @@ export function settingsProfileOf(s: BrowserState, windowId: string | null | und
 
 export function extensionsProfileId(profileId?: string | null, windowId?: string | null): string {
   const s = useBrowser.getState();
-  if (profileId && s.profiles[profileId]) return profileId;
+  if (profileId === AGENTS_PAGE || (profileId && s.profiles[profileId] && !isAgentProfile(s, profileId))) return profileId!;
   const focused = s.ui.focusOrder.find((id) => !!s.windows[id]) ?? s.windowOrder.find((id) => !!s.windows[id]);
+  if (showsAgentsPage(s, s.windows[windowId ?? focused ?? ""])) return AGENTS_PAGE;
   return settingsProfileOf(s, windowId) ?? settingsProfileOf(s, focused) ?? s.settings.defaultProfileId;
 }
 

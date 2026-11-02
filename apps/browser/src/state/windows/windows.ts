@@ -33,6 +33,7 @@ import { groupTree, regrouped, splitsWithin, withSplitsBack } from "./groupMoves
 import { commonGroup, orderSections } from "../groups/groups";
 import { groupOf } from "../pins/tabGrouping";
 import { focusedWindowOf } from "./ui";
+import { isAgentProfile, showsAgentsPage, withoutAgentsPage } from "../browser/agents";
 
 export type CreateWindowOptions = {
   profileId?: string;
@@ -58,6 +59,7 @@ export type WindowsSlice = {
   setWindowFullScreen(id: string, on: boolean): void;
   toggleSidebar(windowId: string): void;
   switchProfile(windowId: string, profileId: string): void;
+  showAgentsPage(windowId: string): void;
   moveTabsToWindow(tabIds: string[], windowId: string | null): string | undefined;
   moveTabToProfile(tabId: string, profileId: string): void;
   moveGroupToWindow(groupId: string, windowId: string | null): string | undefined;
@@ -260,7 +262,11 @@ export const createWindowsSlice: StateCreator<BrowserState, [], [], WindowsSlice
   switchProfile(windowId, profileId) {
     let s = get();
     const w = s.windows[windowId];
-    if (!w || w.kind === "private" || isSmallWindow(w) || !s.profiles[profileId] || w.profileId === profileId) return;
+    if (!w || w.kind === "private" || isSmallWindow(w) || !s.profiles[profileId] || isAgentProfile(s, profileId)) return;
+    if (w.profileId === profileId) {
+      if (w.agentsPage) set({ windows: { ...s.windows, [windowId]: withoutAgentsPage(w) } });
+      return;
+    }
     s = adoptParkedPins(s, windowId, profileId);
     const remembered = w.activeTabIds[profileId];
     let target = remembered && s.tabs[remembered]?.windowId === windowId ? remembered : undefined;
@@ -269,6 +275,18 @@ export const createWindowsSlice: StateCreator<BrowserState, [], [], WindowsSlice
     s = apply(s, activated(s, target));
     if (focusedWindowOf(s) === windowId) s = { ...s, ui: { ...s.ui, lastProfileId: profileId } };
     set(s);
+  },
+
+  showAgentsPage(windowId) {
+    const s = get();
+    const w = s.windows[windowId];
+    if (!w || w.kind === "private" || isSmallWindow(w) || showsAgentsPage(s, w)) return;
+    const recent = w.tabIds
+      .map((id) => s.tabs[id]!)
+      .filter((t) => t && isAgentProfile(s, t.profileId) && w.activeTabIds[t.profileId] === t.id)
+      .sort((a, b) => b.lastActiveAt - a.lastActiveAt)[0];
+    if (recent) return set(apply(s, activated(s, recent.id)));
+    set({ windows: { ...s.windows, [windowId]: { ...w, agentsPage: true, ownerProfileId: w.profileId } } });
   },
 
   moveTabsToWindow(tabIds, windowId) {

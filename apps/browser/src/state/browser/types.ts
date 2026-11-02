@@ -16,6 +16,7 @@ export type Profile = {
   dataId?: string;
   theme?: ProfileTheme | null;
   pinnedCollapsed?: boolean;
+  kind?: "agent";
 };
 
 type WindowBase = {
@@ -28,6 +29,8 @@ type WindowBase = {
   frame: Frame | null;
   fullScreen?: number;
   createdAt: number;
+  agentsPage?: true;
+  ownerProfileId?: string;
 };
 
 export type BrowserWindow =

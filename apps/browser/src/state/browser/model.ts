@@ -3,6 +3,7 @@ import type { BrowserState } from "./store";
 import { DEFAULT_PROFILE_ID } from "../settings/settings";
 import type { BrowserWindow, Navigation, Profile, Tab, TabGroup, TabLive, TabPin, TabSnapshot } from "./types";
 import { pinnedGroupMembers } from "./structure";
+import { isAgentProfile } from "./agents";
 
 
 const launch = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -136,7 +137,7 @@ export function profileFor(s: BrowserState, profileId: string): Profile {
 }
 
 export function bookmarkProfileId(s: BrowserState, window: BrowserWindow | undefined): string {
-  const id = window?.kind === "private" ? incognitoOriginal(window.profileId) : window?.profileId;
+  const id = window?.kind === "private" ? incognitoOriginal(window.profileId) : window && isAgentProfile(s, window.profileId) ? window.ownerProfileId : window?.profileId;
   return id && s.profiles[id] ? id : s.settings.defaultProfileId;
 }
 

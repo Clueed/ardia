@@ -1,6 +1,7 @@
 import { useBrowser, type BrowserState } from "../browser/store";
 import { useTab } from "../browser/hooks";
 import { activeTabId } from "../browser/model";
+import { isAgentProfile } from "../browser/agents";
 import type { Tab } from "../browser/types";
 import { engineMark, type PageEngine } from "../engines/engines";
 import { isPageUnloaded } from "../pins/pinShare";
@@ -35,7 +36,7 @@ function rowFlags(s: BrowserState, windowId: string, tabId: string): number {
   const tab = s.tabs[tabId];
   const live = s.live[tabId];
   let flags = iconMarks(s, tabId);
-  if (tab && activeTabId(s, tab.windowId, tab.profileId) === tabId) flags |= ACTIVE;
+  if (tab && activeTabId(s, tab.windowId, tab.profileId) === tabId && (!isAgentProfile(s, tab.profileId) || s.windows[tab.windowId]?.profileId === tab.profileId)) flags |= ACTIVE;
   if (s.selection[windowId]?.includes(tabId)) flags |= SELECTED;
   if (live?.playingAudio) flags |= PLAYING;
   if (live?.isLoading) flags |= LOADING;

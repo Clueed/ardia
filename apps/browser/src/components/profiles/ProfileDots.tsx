@@ -6,22 +6,23 @@ import { layout, useTheme } from "../ui/theme";
 import { useIsIncognito, useProfile, useSettings } from "../../state/browser/hooks";
 import { useProfileOrder, useProfileRecords } from "../../state/profiles/hooks";
 import { useNativePagerPosition, usePagerPages, type PagerPage } from "../../state/windows/profilePager";
+import { AGENTS_LOOK, AGENTS_PAGE } from "../../state/browser/agents";
 import { ContextMenuArea, useHover } from "../ui";
 import { TooltipAbove } from "../ui/TooltipAbove";
 import { SIDEBAR_FOOTER_DOWNLOADS } from "../sidebar/geometry";
 import { switcherCellWidth, switcherIcons, SwitcherMark } from "./ProfileIcons";
+import { symbolIcon } from "../../lib/customIcon";
 import { openProfileItemMenu } from "./profileMenu";
 import { profileSwitcher } from "./tokens";
 
 export const PROFILE_DOTS_HEIGHT = profileSwitcher.height;
+const AGENTS_ICON = symbolIcon("terminal.fill");
 const { band: BAND, dotTooltipLift } = profileSwitcher;
 const SIDE_ROOM = layout.sidebarInset;
 const SIDE_ROOM_BESIDE_DOWNLOADS = layout.sidebarInset + SIDEBAR_FOOTER_DOWNLOADS.size + 4;
 
 export function useProfileDotsShown() {
-  const incognito = useIsIncognito();
-  const count = useProfileOrder((o) => o.length);
-  return !incognito && count > 1;
+  return !useIsIncognito();
 }
 
 export function ProfileDots({ windowId, width, besideDownloads }: { windowId: string; width: number; besideDownloads: boolean }) {
@@ -33,6 +34,7 @@ export function ProfileDots({ windowId, width, besideDownloads }: { windowId: st
   return (
     <View style={{ height: PROFILE_DOTS_HEIGHT, alignItems: "center" }}>
       <View style={{ marginTop: (PROFILE_DOTS_HEIGHT - 3 - BAND) / 2, height: BAND, flexDirection: "row" }}>
+        <Dot id={AGENTS_PAGE} windowId={windowId} icon={AGENTS_ICON} page={pages.find((p) => p.id === AGENTS_PAGE)} pos={pager.pos} />
         {ids.map((id, i) => (
           <Dot key={id} id={id} windowId={windowId} icon={icons[i] ?? null} page={pages.find((p) => p.id === id)} pos={pager.pos} />
         ))}
@@ -44,7 +46,7 @@ export function ProfileDots({ windowId, width, besideDownloads }: { windowId: st
 function Dot({ id, windowId, icon, page, pos }: { id: string; windowId: string; icon: string | null; page: PagerPage | undefined; pos: Animated.Value }) {
   const theme = useTheme();
   useNativePagerPosition(windowId);
-  const name = useProfile(id, (p) => p?.name ?? "");
+  const name = useProfile(id, (p) => p?.name ?? (id === AGENTS_PAGE ? AGENTS_LOOK.name : ""));
   const { hovered, hoverProps } = useHover();
   const [pressed, setPressed] = useState(false);
   if (pressed && !hovered) setPressed(false);
@@ -58,7 +60,7 @@ function Dot({ id, windowId, icon, page, pos }: { id: string; windowId: string; 
   return (
     <View {...hoverProps} ref={mark}>
       <TooltipAbove text={name} active={hovered && !pressed} centerX={cell / 2} bottom={BAND / 2 + dotTooltipLift} />
-      <ContextMenuArea onContextMenu={() => void openProfileItemMenu(id, "sidebar", windowId, mark.current)}>
+      <ContextMenuArea onContextMenu={() => id !== AGENTS_PAGE && void openProfileItemMenu(id, "sidebar", windowId, mark.current)}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={name}

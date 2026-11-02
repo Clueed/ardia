@@ -9,14 +9,16 @@ import {
   type ExtensionPackage,
   type ExtensionsChange,
   type ExtensionsSyncApply,
+  type ExtensionsSyncState,
   type ExtensionSyncIntent,
   type InstalledExtension,
   type SidePanelRequest,
+  type SyncedExtension,
   type TabsRequest,
 } from "@ardia/ardiacore";
 
 export { extensionSearchEngines };
-export type { ExtensionsSyncApply, InstalledExtension, ActionState, ExtensionPackage, ExtensionInstallPrompt, TabsRequest };
+export type { ExtensionsSyncApply, ExtensionsSyncState, SyncedExtension, InstalledExtension, ActionState, ExtensionPackage, ExtensionInstallPrompt, TabsRequest };
 
 export const listExtensions = async (profile: string) => (await call("extensions.list", { profile })).extensions;
 export const inspectUnpackedExtension = (path: string) => call("extensions.inspectUnpacked", { path });

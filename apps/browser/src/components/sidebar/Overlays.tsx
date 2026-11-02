@@ -3,6 +3,7 @@ import { StyleSheet, View } from "react-native";
 import { useWindowId } from "../../state/browser/hooks";
 import { startSidebarEffects } from "../../state/sidebar/effects";
 import { MeetingAlert } from "../live/MeetingAlert";
+import { CliConnectCard } from "../window/CliConnectCard";
 import { HoverCard } from "./HoverCard";
 import { IconPicker } from "./IconPicker";
 import { ProfileIconPicker } from "../profiles/ProfileIconPicker";
@@ -19,6 +20,7 @@ export function SidebarOverlays({ windowWidth }: { windowWidth: number }) {
     <View pointerEvents="box-none" style={StyleSheet.absoluteFill} onLayout={(e) => setSize({ width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height })}>
       <HoverCard windowId={windowId} width={size.width} height={size.height} />
       <MeetingAlert windowId={windowId} windowWidth={windowWidth} />
+      <CliConnectCard windowId={windowId} windowWidth={windowWidth} />
       <IconPicker windowId={windowId} sidebarWidth={sidebarWidth} />
       <ProfileIconPicker windowId={windowId} />
       <SearchTabs windowId={windowId} windowWidth={windowWidth} />

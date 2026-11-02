@@ -5,6 +5,7 @@ import { groupOf, pinnedChildGroup } from "../pins/tabGrouping";
 import { splitOf, splitTabIds, splitTabIdsOf } from "../splits/splits";
 import type { BrowserWindow, Tab } from "../browser/types";
 import { isAsleep } from "./pageSession";
+import { ownerProfileOf } from "../browser/agents";
 
 const regular = (s: BrowserState, id: string) => !inPinnedContainer(s, id);
 
@@ -33,7 +34,7 @@ function firstRegular(s: BrowserState, w: BrowserWindow, profileId: string): num
 }
 
 export function newTabPlacement(s: BrowserState, w: BrowserWindow, profileId: string | undefined): { index: number; openerId?: string } {
-  const profile = w.kind !== "private" && profileId && s.profiles[profileId] ? profileId : w.profileId;
+  const profile = w.kind !== "private" && profileId && s.profiles[profileId] ? profileId : ownerProfileOf(s, w);
   const beside = s.settings.newTabPosition === "nextToCurrent" ? belowCurrent(s, w, profile) : undefined;
   return beside ?? { index: listStart(s, w, profile) };
 }

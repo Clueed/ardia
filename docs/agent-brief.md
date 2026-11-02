@@ -136,6 +136,11 @@ Engine files are in `engine/ardiacore/src/ardia/core`, app files in `packages/ar
   engine at launch and the renderer runs it in every http(s) and file frame. Changing it needs an app rebuild, not an
   engine one. Its `post(kind, json)` crosses the page channel to `-[ArdiaWebView tab:didReceivePageMessage:…]` (`ArdiaWebView+PageMessages.mm`),
   which handles it or emits `pageMessage` (JS `onPageMessage`).
+- **Agent profiles** (`ardia connect`, `docs/cli.md`): `Profile.kind === "agent"` profiles live in `profiles` but never in
+  `profileOrder`; the pager's pages are `[AGENTS_PAGE, ...profileOrder]` (`state/browser/agents.ts`). A window on the Agents
+  page has `agentsPage` set and, while an agent tab shows, `profileId` is that agent profile and `ownerProfileId` the owner's,
+  which new tabs, links and new windows use (`ownerProfileOf`). Connect requests, sessions and renames reach JS as
+  `gateway.*` events (`state/app/cliConnect.ts`); fake them in a dev instance with `globalThis.acCliConnect`.
 - **CEF-era code** (removed in 6bdf66ce): `git show 6bdf66ce^:packages/cef/ios/<file>`. Comments citing
   `packages/cef/…` mean: `ACBrowserView.mm`, `ACClient.mm` → `ArdiaWebView*.mm`; `ACChromeWindow.mm`,
   `ACPopupWindow.mm` → `ArdiaWindowController.mm`, `ArdiaPopupWindow.mm`; `ACActivation`, `ACTabStrip`, `ACPictureInPicture`,

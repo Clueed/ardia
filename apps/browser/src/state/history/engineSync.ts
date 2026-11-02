@@ -4,6 +4,7 @@ import { useBrowser, type BrowserState } from "../browser/store";
 import { afterFirstWindow } from "../../lib/afterFirstWindow";
 import { MAX_HISTORY, MAX_VISIT_TIMES } from "./history";
 import { engineProfile, isIncognitoProfile } from "../browser/model";
+import { isAgentProfile } from "../browser/agents";
 import type { HistoryEntry } from "../browser/types";
 import { isWebPageUrl } from "../../lib/url";
 import { engineProfiles } from "../profiles/engineProfiles";

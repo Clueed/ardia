@@ -5,13 +5,14 @@ import { engineProfile, incognitoOriginal, newId, viewTabIds, without } from "..
 import { DEFAULT_PROFILE_ID } from "../settings/settings";
 import { activated, apply, removeTabs, withNewTab } from "../tabs/tabs";
 import type { Profile, ProfileColor } from "../browser/types";
+import { isAgent, ownerProfileOf, showsAgentsPage } from "../browser/agents";
 
 export type ProfilesSlice = {
   profiles: Record<string, Profile>;
   profileOrder: string[];
   orphanedProfileData: string[];
 
-  createProfile(options: { name: string; color?: ProfileColor; icon?: string | null; shareWith?: string | null }): string;
+  createProfile(options: { name: string; color?: ProfileColor; icon?: string | null; shareWith?: string | null; kind?: "agent" }): string;
   updateProfile(id: string, patch: Partial<Pick<Profile, "name" | "icon" | "pinnedCollapsed">>): void;
   setProfileLook(id: string, look: Partial<Pick<Profile, "color" | "theme">>): void;
   deleteProfile(id: string): void;
@@ -52,20 +53,22 @@ export const createProfilesSlice: StateCreator<BrowserState, [], [], ProfilesSli
     profileOrder: [DEFAULT_PROFILE.id],
     orphanedProfileData: [],
 
-    createProfile({ name, color, icon = null, shareWith }) {
+    createProfile({ name, color, icon = null, shareWith, kind }) {
       const s = get();
-      const source = shareWith ? s.profiles[shareWith] : undefined;
+      const agent = kind === "agent";
+      const source = shareWith && !agent ? s.profiles[shareWith] : undefined;
       const profile: Profile = {
-        id: newId("p"),
-        name: name.trim() || `Profile ${s.profileOrder.length + 1}`,
+        id: newId(agent ? "a" : "p"),
+        name: name.trim() || (agent ? "Agent" : `Profile ${s.profileOrder.length + 1}`),
         color: color ?? unusedProfileColor(s.profiles),
         icon,
         createdAt: Date.now(),
         ...(source ? { dataId: dataIdOf(source) } : {}),
+        ...(agent ? { kind } : {}),
       };
       const profiles = { ...s.profiles, [profile.id]: profile };
-      const bookmarks = ensureRoots(s.bookmarks, engineProfile({ profiles }, profile.id))[0];
-      set({ profiles, profileOrder: [...s.profileOrder, profile.id], bookmarks });
+      const bookmarks = agent ? s.bookmarks : ensureRoots(s.bookmarks, engineProfile({ profiles }, profile.id))[0];
+      set({ profiles, profileOrder: agent ? s.profileOrder : [...s.profileOrder, profile.id], bookmarks });
       return profile.id;
     },
 
@@ -78,7 +81,8 @@ export const createProfilesSlice: StateCreator<BrowserState, [], [], ProfilesSli
     },
 
     deleteProfile(id) {
-      if (!get().profiles[id] || get().profileOrder.length <= 1) return;
+      const agent = isAgent(get().profiles[id]);
+      if (!get().profiles[id] || (!agent && get().profileOrder.length <= 1)) return;
       for (const w of Object.values(get().windows)) if (w.kind === "private" && incognitoOriginal(w.profileId) === id) get().closeWindow(w.id);
       let s = get();
       const profileOrder = s.profileOrder.filter((p) => p !== id);
@@ -92,12 +96,16 @@ export const createProfilesSlice: StateCreator<BrowserState, [], [], ProfilesSli
       const engineLeft = !profileOrder.some((p) => engineProfile(s, p) === engine);
       const orphaned = !engineLeft || s.orphanedProfileData.includes(engine) ? s.orphanedProfileData : [...s.orphanedProfileData, engine];
 
+      const onAgentsPage = Object.values(s.windows).filter((w) => showsAgentsPage(s, w)).map((w) => w.id);
       for (const w of Object.values(s.windows)) {
         if (w.profileId !== id) continue;
-        const other = w.tabIds.find((t) => s.tabs[t]?.profileId !== id);
+        const owner = agent ? ownerProfileOf(s, w) : null;
+        const other = owner
+          ? (w.activeTabIds[owner] && s.tabs[w.activeTabIds[owner]!]?.windowId === w.id ? w.activeTabIds[owner] : w.tabIds.find((t) => s.tabs[t]?.profileId === owner))
+          : w.tabIds.find((t) => s.tabs[t]?.profileId !== id);
         if (other) s = apply(s, activated(s, w.activeTabIds[s.tabs[other]!.profileId] ?? other));
         else {
-          const [next, tab] = withNewTab(s, w.id, { profileId: fallback, background: true });
+          const [next, tab] = withNewTab(s, w.id, { profileId: owner ?? fallback, background: true });
           s = apply(next, activated(next, tab));
         }
       }
@@ -108,7 +116,8 @@ export const createProfilesSlice: StateCreator<BrowserState, [], [], ProfilesSli
       );
       const windows = { ...s.windows };
       for (const w of Object.values(windows)) {
-        if (w.activeTabIds[id]) windows[w.id] = { ...w, activeTabIds: without(w.activeTabIds, [id]) };
+        const kept = onAgentsPage.includes(w.id) && !showsAgentsPage(s, w) ? { agentsPage: true as const, ownerProfileId: w.profileId } : {};
+        if (w.activeTabIds[id] || Object.keys(kept).length) windows[w.id] = { ...w, ...kept, activeTabIds: without(w.activeTabIds, [id]) };
       }
       const roots = engineLeft ? engineBookmarkRoots(s.bookmarks, engine) : null;
       set({

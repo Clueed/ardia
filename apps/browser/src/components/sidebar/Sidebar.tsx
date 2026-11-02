@@ -24,6 +24,9 @@ import { closeFolderPanel } from "../../state/sidebar/tileFolderUi";
 import { openSidebarMenu } from "../../state/sidebar/menus";
 import { GLOW_ROOM, ROW_PITCH, type SidebarGeometry } from "./pageLayout";
 import { SidebarPage } from "./SidebarPage";
+import { AgentsPage } from "./AgentsPage";
+import { AGENTS_PAGE } from "../../state/browser/agents";
+import { useWindowPageId } from "../../state/profiles/hooks";
 import { SidebarRowLookContext, useSidebarRowLookSource } from "./rowLook";
 import { useRevealTabs } from "./useRevealTabs";
 
@@ -31,7 +34,8 @@ const HEADER_RIGHT = space.m;
 
 export function Sidebar({ width }: { width: number }) {
   const windowId = useWindowId();
-  const current = useWindowProfileId();
+  const profileId = useWindowProfileId();
+  const current = useWindowPageId(windowId) ?? profileId;
   const { pages, paging } = usePagerPages(windowId);
   const [available, setAvailable] = useState(0);
   const newTabAtTop = useSettings((s) => s.newTabButtonPosition === "top");
@@ -47,7 +51,7 @@ export function Sidebar({ width }: { width: number }) {
   const dots = useProfileDotsShown();
   const footerDownloads = addressBar && hasDownloads;
   const footer = dots || footerDownloads ? PROFILE_DOTS_HEIGHT : 0;
-  const nothingPinned = useNoTiles(windowId, current);
+  const nothingPinned = useNoTiles(windowId, profileId) && current !== AGENTS_PAGE;
   const rowLook = useSidebarRowLookSource();
 
   const drag = useRef<DragController | null>(null);
@@ -88,7 +92,10 @@ export function Sidebar({ width }: { width: number }) {
               onLayout={(e) => setAvailable(e.nativeEvent.layout.height)}
             >
               <SidebarRowLookContext.Provider value={rowLook}>
-                {pages.map((page) => (
+                {pages.map((page) =>
+                  page.id === AGENTS_PAGE ? (
+                    <AgentsPage key={page.id} slot={page.slot} width={width} current={page.id === current} resting={!!page.resting} />
+                  ) : (
                   <SidebarPage
                     key={page.id}
                     profileId={page.id}
@@ -103,7 +110,8 @@ export function Sidebar({ width }: { width: number }) {
                     onScrollView={onScrollView}
                     onScrollY={onScrollY}
                   />
-                ))}
+                  ),
+                )}
               </SidebarRowLookContext.Provider>
             </View>
 
