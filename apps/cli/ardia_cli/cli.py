@@ -72,7 +72,7 @@ Examples:
 """
 EXEC_EPILOG = """\
 Endpoint: --ws, else --port (plain DevTools servers only), else $ARDIA_CDP_URL, else
-<data dir>/Chromium/ArdiaControl.json with --data-dir or $ARDIA_DATA_DIR, else the installed Ardia's, which needs
+<data dir>/ArdiaGateway.json with --data-dir or $ARDIA_DATA_DIR, else the installed Ardia's, which needs
 --session ID or $ARDIA_SESSION from ardia connect.
 """
 SKILLS_DESCRIPTION = """\

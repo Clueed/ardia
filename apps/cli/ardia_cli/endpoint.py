@@ -23,7 +23,7 @@ SESSION_ENDED = (
 ROUTE_TIMEOUT = 5
 UNREACHABLE_EXIT = 2
 SESSION_EXIT = 6
-CONTROL_FILE = "ArdiaControl.json"
+CONTROL_FILE = "ArdiaGateway.json"
 INSTALLED_DATA_DIR = Path.home() / "Library" / "Application Support" / "com.ardia.browser"
 _BROWSER_PATH = re.compile(r"^/devtools/browser/[0-9A-Za-z-]{1,128}$")
 _TOKEN = re.compile(r"^[\x21-\x7e]{16,1024}$")
@@ -74,7 +74,7 @@ def resolve(ws: str | None = None, port: int | None = None, data_dir: str | None
     env_ws = os.environ.get("ARDIA_CDP_URL")
     if env_ws:
         return _from_ws(env_ws, "ARDIA_CDP_URL")
-    return from_control_file(data_root(data_dir) / "Chromium" / CONTROL_FILE, session_id(session))
+    return from_control_file(control_path(data_root(data_dir)), session_id(session))
 
 
 def session_id(session: str | None = None) -> str | None:
@@ -105,8 +105,12 @@ def explicit_data_root(data_dir: str | None = None) -> Path | None:
     return Path(root).expanduser() if root else None
 
 
+def control_path(root: Path) -> Path:
+    return root / CONTROL_FILE
+
+
 def require_control(root: Path) -> Control:
-    return read_control(root / "Chromium" / CONTROL_FILE)
+    return read_control(control_path(root))
 
 
 def _from_ws(url: str, source: str) -> Endpoint:

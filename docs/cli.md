@@ -39,7 +39,7 @@ the pins into `pyproject.toml`).
   `disconnect`, quit, control off or 30 minutes idle, or mistyped) also exits 6 with `That session has ended …`:
   `disconnect` and `rename` get a 404; `exec` and `scripts test` ask `/ardia/active` after the browser socket fails
   to open or drops, and a 404 there means the session, anything else the exit-2 line. `--port`, `--ws` and
-  `$ARDIA_CDP_URL` need no session and ignore one. All of these find Ardia through `ArdiaControl.json` (below), with
+  `$ARDIA_CDP_URL` need no session and ignore one. All of these find Ardia through `ArdiaGateway.json` (below), with
   the same checks and exit 2.
 - `ardia exec [CODE | -] [-f FILE] [--session ID] [--data-dir DIR] [--port N] [--ws URL] [--timeout S] [--json]` runs
   Python with top-level `await`. In scope: `browser` (pydoll `Chrome`), `tab` (from `GET /ardia/active?token=SESSION`
@@ -94,8 +94,8 @@ is stuck, and the worker deletes its temp snapshot in its own `finally`. At exit
 (workers check it before making a temp folder and at every backup or copy step), waits up to 1 s for live workers,
 then deletes any temp folder still registered. The data dir is the token path's
 (`--data-dir`, `$ARDIA_DATA_DIR`, else the installed app's); with `--port`, `--ws` or `$ARDIA_CDP_URL` it's only
-`--data-dir` or `$ARDIA_DATA_DIR`, and without one they raise `BrowsingDataError`. Both run the same
-`ArdiaControl.json` checks as the token path first (regular file, owned, 0600, live pid), so they work only while
+`--data-dir` or `$ARDIA_DATA_DIR`, and without one they raise `BrowsingDataError`. All three run the same
+`ArdiaGateway.json` checks as the token path first (regular file, owned, 0600, live pid), so they work only while
 Ardia runs with control on. None reads cookies, passwords, Login Data or Web Data. They cover the owner's real
 profiles whatever profile the session is in, and skip agent profiles (`session.json` profiles with
 `"kind": "agent"`): their pins, tabs and history never show up.
@@ -146,7 +146,7 @@ own folder tree; nothing may come from Ardia's data dir (the `--data-dir`/`$ARDI
 app's), even inside the tree. Both are decided by file identity (`st_dev`, `st_ino` of each ancestor after
 resolving symlinks), not by path spelling, since APFS is case-insensitive. A script directly in the home folder or
 `/` may import nothing. Otherwise the build fails
-before anything is injected or published, so a script can't bundle `ArdiaControl.json` or other files and send
+before anything is injected or published, so a script can't bundle `ArdiaGateway.json`, `ArdiaControl.json` or other files and send
 them to a page. `data:` imports are allowed. The tarball ships esbuild in `ardia_cli/bin/esbuild` and an installed
 CLI uses only that one; from the repo (`python -m ardia_cli`) it falls back to
 `node_modules/@esbuild/darwin-arm64/bin/esbuild` in a parent folder of the package, then `esbuild` on PATH. It never
@@ -184,8 +184,8 @@ looks in the cwd.
   Exit 0 ran without uncaught exceptions and `--expect` truthy, 1 otherwise, 2 Ardia unreachable, 6 no session or it
   ended.
 - `ardia scripts install FILE [--data-dir DIR]`, `ardia scripts uninstall NAME [--data-dir DIR]` (by `@name` or id),
-  `ardia scripts list [--json] [--data-dir DIR]`. Install and uninstall need control on (the `ArdiaControl.json`
-  checks, else the exit-2 line); list doesn't.
+  `ardia scripts list [--json] [--data-dir DIR]`. Install and uninstall need control on (the `ArdiaGateway.json`
+  checks, else the exit-2 line); list doesn't, and repairs only a named data dir or one with a live gateway file.
 
 ### Install contract with the app
 
@@ -232,23 +232,37 @@ The data dir is `--data-dir`, else `$ARDIA_DATA_DIR`, else `~/Library/Applicatio
 1. `--ws URL`, a browser WebSocket URL.
 2. `--port N`, a plain DevTools server on 127.0.0.1 (`/json/version`). For test servers only.
 3. `$ARDIA_CDP_URL`, like `--ws`.
-4. `<data dir>/Chromium/ArdiaControl.json`, with `--data-dir` or `$ARDIA_DATA_DIR`, else the installed app's
-   `~/Library/Application Support/com.ardia.browser/Chromium/ArdiaControl.json`.
+4. `<data dir>/ArdiaGateway.json`, with `--data-dir` or `$ARDIA_DATA_DIR`, else the installed app's
+   `~/Library/Application Support/com.ardia.browser/ArdiaGateway.json`.
 
-The app writes `ArdiaControl.json` when the setting is on:
-`{"port":P,"browser":"/devtools/browser/<guid>","token":"…","pid":…,"generation":N}`. The CLI opens it without
+The token path talks to the app's gateway, not the engine. The gateway is a small server in ArdiaCore's native code
+(`packages/ardiacore`), on a random free 127.0.0.1 port Q, started and stopped with the setting. It sits in front of
+the engine's token server: it reads `Chromium/ArdiaControl.json` itself, opens its own upstream sockets with the
+engine token, and narrows the engine's policy (method allowlist, web-only targets, header stripping) to one profile
+per session. It writes `<data dir>/ArdiaGateway.json` (temp file and rename, deleted on stop and at quit):
+`{"port":Q,"browser":"/devtools/browser/<random id>","token":"…","pid":…,"generation":N}`. The CLI opens it without
 following links and trusts it only when it's a regular file the user owns, mode 0600, and `pid` is alive. Its `token`
-is the control token: the engine takes it only on `/ardia/profiles` and `/ardia/connect`, never on a WebSocket or
-`/ardia/active`. Everything else uses the session token from `connect` (`[\x21-\x7e]{16,1024}`, else the
-session-ended line): `exec` connects to `ws://127.0.0.1:P<browser>?token=<session>`; pydoll keeps the query on every
-`/devtools/page/<id>` URL, so page sockets carry it too. The engine scopes that socket to the session's Chromium
-profile (targets listed, attached and created there only).
+is the control token, new on every start: the gateway takes it only on `/ardia/profiles` and `/ardia/connect`, never
+on a WebSocket or `/ardia/active`. Everything else uses the session token from `connect` (`[\x21-\x7e]{16,1024}`,
+else the session-ended line): `exec` connects to `ws://127.0.0.1:Q<browser>?token=<session>`; pydoll keeps the query
+on every `/devtools/page/<id>` URL, so page sockets carry it too. The gateway scopes those sockets to the session's
+profile: targets listed, attached, reported and closed there only, `Target.createTarget` answered by the app opening
+a tab in that profile, page sockets to other targets refused at the handshake.
 
-The routes are `GET http://127.0.0.1:P/ardia/<route>?token=…&…` with every value percent-encoded, a JSON body, and
-errors as 4xx `{"error": "<code>"}`; a 404 without a code is an unknown token (exit 2 for the control token, 6 for a
-session). The CLI calls them directly (no proxy, no Origin header, 5 s timeout) with tokens redacted like everywhere
-else. The active-page route `/ardia/active?token=<session>` answers `{"targetId": "<id>"}`, or `null` when New Tab or
-an Ardia view is showing; when it fails, `exec` falls back to the visibility check. A missing, stale or unsafe file, or a refused connection, prints one line and exits 2:
+The routes are `GET http://127.0.0.1:Q/ardia/<route>?token=…&…` with every value percent-encoded, a JSON body, and
+errors as 4xx `{"error": "<code>"}` (400 `bad-name`, 404 `no-such-profile` or an unknown token, 409 `name-taken`,
+403 `not-agent`, 429 `too-many-requests`); a 404 without a code is an unknown token (exit 2 for the control token, 6
+for a session). The CLI calls them directly (no proxy, no Origin header, which the gateway refuses, 5 s timeout) with
+tokens redacted like everywhere else. The active-page route `/ardia/active?token=<session>` answers
+`{"targetId": "<id>"}`, or `{"targetId": null}` when New Tab or an Ardia view is showing; when it fails, `exec` falls
+back to the visibility check.
+
+Known weakness, accepted: the engine still writes its own all-access token to `<data dir>/Chromium/ArdiaControl.json`
+(same shape, 0600), and anything that can read that file can skip the gateway and its profile scope. The threat model
+is careless or prompt-injected agents driving Ardia through `ardia`, not processes with direct file access, so this
+is outside it. The CLI never reads that file.
+
+A missing, stale or unsafe gateway file, or a refused connection, prints one line and exits 2:
 `Ardia isn't running, or "Let the ardia command control Ardia" is off in Settings.` There's no port scanning and no
 `/json` fallback on this path. Neither token reaches the output (both are registered the moment they're read, the
 session one before anything connects), except the session token `connect` prints as its result, written past the
@@ -319,7 +333,7 @@ ardia exec --port <port> 't = await new_tab("https://example.com"); await t.titl
 scripts/agent/ac quit /tmp/ardia-cli-test
 ```
 
-The `ArdiaControl.json` path needs the app's token server: Chrome's plain server accepts `?token=` on the browser
+The `ArdiaGateway.json` path needs the app's gateway and the engine's token server behind it: Chrome's plain server accepts `?token=` on the browser
 socket but answers 500 on page sockets with a query. For the installer:
 
 ```sh

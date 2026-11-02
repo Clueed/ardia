@@ -77,7 +77,7 @@ class Base(unittest.TestCase):
         return fake
 
     def write_control(self, port: int):
-        path = self.root / "Chromium" / endpoint.CONTROL_FILE
+        path = self.root / "ArdiaGateway.json"
         path.write_text(json.dumps({"port": port, "browser": "/devtools/browser/abc", "token": CONTROL_TOKEN, "pid": os.getpid(), "generation": 1}))
         path.chmod(0o600)
 
@@ -176,6 +176,9 @@ class Connect(Base):
                 self.assertEqual(err.count("\n"), 1)
 
     def test_unreachable(self):
+        engine_file = self.root / "Chromium" / "ArdiaControl.json"
+        engine_file.write_text(json.dumps({"port": 1, "browser": "/devtools/browser/abc", "token": CONTROL_TOKEN, "pid": os.getpid(), "generation": 1}))
+        engine_file.chmod(0o600)
         status, _, err = self.run_cli("connect", "Work")
         self.assertEqual(status, 2)
         self.assertIn(endpoint.NOT_REACHABLE, err)
@@ -378,7 +381,7 @@ class AgentProfiles(Base):
             browsing.open_tabs(self.root, profile="Bot")
 
     def test_open_tabs_needs_control(self):
-        (self.root / "Chromium" / endpoint.CONTROL_FILE).unlink()
+        (self.root / "ArdiaGateway.json").unlink()
         with self.assertRaises(browsing.BrowsingDataError):
             browsing.open_tabs(self.root)
         with self.assertRaises(browsing.BrowsingDataError):
