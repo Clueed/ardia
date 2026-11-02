@@ -5,6 +5,7 @@ import {
   type CliConnectRequest,
   type CliRename,
   type CliSession,
+  type GatewayActivity,
   type GatewayCloseTab,
   type GatewayOpenTab,
   type GatewayProfile,
@@ -30,3 +31,4 @@ export const onCliRename = (listener: (rename: CliRename) => void) => on("gatewa
 export const onGatewayOpenTab = (listener: (open: GatewayOpenTab) => void) => on("gateway.openTab", listener);
 export const onGatewayCloseTab = (listener: (close: GatewayCloseTab) => void) => on("gateway.closeTab", listener);
 export const onGatewayRun = (listener: (run: GatewayRun) => void) => on("gateway.run", listener);
+export const onGatewayActivity = (listener: (activity: GatewayActivity) => void) => on("gateway.activity", listener);

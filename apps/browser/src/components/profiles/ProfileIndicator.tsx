@@ -23,7 +23,7 @@ function useIndicator(room: number) {
   const agents = profile.id === AGENTS_PAGE;
   const title = incognito ? "Incognito" : profile.name;
   const textWidth = useMeasuredWidth(`profile-name|${title}`);
-  const shown = (incognito || agents || profiles.length >= 2) && room >= ICON_WIDTH;
+  const shown = (incognito || profiles.length >= 2) && room >= ICON_WIDTH;
   const nameRoom = room - 2 * PAD;
   const showName = !!textWidth && (textWidth <= nameRoom || nameRoom >= MIN_CUT_NAME);
   const width = !shown ? 0 : showName ? Math.min(room, textWidth + 2 * PAD) : ICON_WIDTH;

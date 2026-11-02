@@ -10,13 +10,14 @@ import { openAgentFolderMenu, toggleAgentFolder } from "../../state/profiles/age
 import { useAgentConnected } from "../../state/app/cliConnect";
 import { openSidebarMenu } from "../../state/sidebar/menus";
 import { dismissHover } from "../../state/sidebar/hover";
+import { registerRow } from "../../state/sidebar/sidebarUi";
 import { usePageStyle } from "../../state/windows/profilePager";
 import { DragScope } from "./DragProvider";
 import { Fold, useFold, type FoldEntry } from "./Fold";
 import { GROUP_BORDER, GROUP_HEADER_RADIUS, LIVE_FOLDER_PAD, GROUP_RADIUS } from "./geometry";
 import { NoteRow } from "./LiveFolderRows";
-import { GLOW_ROOM } from "./pageLayout";
-import { SCROLL_EDGE } from "./ScrollEdge";
+import { listTopInset } from "./pageLayout";
+import { useAddressBarInSidebar } from "../../state/windows/layout";
 import { TabRow } from "./TabRow";
 import { TAB_ROW, useSidebarTokens } from "./tokens";
 import { SidebarRowLabel, SidebarRowSurface } from "./SidebarRow";
@@ -30,6 +31,7 @@ export const AgentsPage = memo(function AgentsPage({ slot, width, current, resti
   const windowId = useWindowId();
   const pageStyle = usePageStyle(windowId, slot, width);
   const agents = useAgentProfileIds();
+  const topInset = listTopInset(useAddressBarInSidebar());
   return (
     <Animated.View
       pointerEvents={current ? "auto" : "none"}
@@ -42,7 +44,7 @@ export const AgentsPage = memo(function AgentsPage({ slot, width, current, resti
             <ScrollView
               style={{ flex: 1 }}
               showsVerticalScrollIndicator={false}
-              contentContainerStyle={{ flexGrow: 1, width, paddingHorizontal: layout.sidebarInset, paddingTop: GLOW_ROOM + SCROLL_EDGE.inset, gap: layout.rowGap }}
+              contentContainerStyle={{ flexGrow: 1, width, paddingHorizontal: layout.sidebarInset, paddingTop: topInset, gap: layout.rowGap }}
             >
               {agents.length ? agents.map((id) => <AgentFolder key={id} profileId={id} windowId={windowId} />) : <EmptyLine />}
               <ContextMenuArea style={{ flexGrow: 1, minHeight: 24 }} onContextMenu={() => void openSidebarMenu(windowId)}>
@@ -93,7 +95,7 @@ function AgentFolderHeader({ profileId, windowId, open, count, collapsed }: { pr
   const connected = useAgentConnected(profileId);
   const { hovered, hoverProps } = useHover();
   return (
-    <View {...hoverProps}>
+    <View ref={(v) => registerRow(windowId, `agentfolder|${profileId}`, v)} {...hoverProps}>
       <ContextMenuArea
         onContextMenu={() => {
           dismissHover();
@@ -132,4 +134,4 @@ function AgentFolderHeader({ profileId, windowId, open, count, collapsed }: { pr
 const ICON = { width: 16, height: 16 } as const;
 const CHEVRON = { width: 10, height: 10 } as const;
 const TRAILING = { flexDirection: "row", alignItems: "center", gap: space.s } as const;
-const EMPTY = { paddingHorizontal: TAB_ROW.contentLeft, paddingVertical: space.s } as const;
+const EMPTY = { paddingHorizontal: TAB_ROW.contentLeft, minHeight: layout.rowHeight, justifyContent: "center" } as const;

@@ -4,6 +4,7 @@ import {
   onCliConnectCancel,
   onCliConnectRequest,
   onCliRename,
+  onGatewayActivity,
   onCliSessions,
   replyCliConnect,
   setGatewayProfiles,
@@ -20,7 +21,7 @@ import { agentProfileIds, isAgentProfile } from "../browser/agents";
 import { engineProfile } from "../browser/model";
 import { createAgentProfile } from "../profiles/agents";
 import { seedAgentExtensions } from "../extensions/agentExtensions";
-import { useCli } from "./cliControl";
+import { noteGatewayActive, useCli } from "./cliControl";
 import { startGatewayTabs } from "./gatewayTabs";
 import { startSessionRuns } from "../automation/sessionRun";
 
@@ -145,6 +146,7 @@ export function startCliConnect() {
   onCliConnectCancel(({ request }) => void drop(request));
   onCliSessions(sessionsChanged);
   onCliRename(renamed);
+  onGatewayActivity(({ active }) => noteGatewayActive(gatewayOn && active));
   onNotificationResponse((response) => {
     const id = (response.data as { cliConnect?: unknown } | null)?.cliConnect;
     if (typeof id !== "string") return;
@@ -183,6 +185,7 @@ let attempts = 0;
 
 function clearGateway() {
   sentProfiles = null;
+  noteGatewayActive(false);
   useCliConnect.setState({ requests: [], sessions: [] });
 }
 

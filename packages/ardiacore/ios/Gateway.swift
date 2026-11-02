@@ -30,6 +30,8 @@ final class Gateway {
   private var sessions: [GatewaySession] = []
   private var opens: [String: (session: GatewaySession, deadline: Date, done: (String?) -> Void)] = [:]
   private var runs: [String: (Int, Any?) -> Void] = [:]
+  private var announcedActive = false
+  private var openCount = 0
   private var quitObserver: NSObjectProtocol?
 
   private var chromiumDirectory: String { ArdiaHost.dataDirectory }
@@ -150,6 +152,7 @@ final class Gateway {
     for open in opens.values { open.done(nil) }
     for answer in runs.values { answer(500, ["error": "failed", "message": "Control is off."]) }
     runs = [:]
+    announceActivity()
     opens = [:]
     lateOpens = [:]
     timer?.cancel()
@@ -211,12 +214,20 @@ final class Gateway {
     let idle = sessions.filter { now.timeIntervalSince($0.lastActive) > Self.idleLimit }
     for session in idle { end(session, announce: false) }
     if !idle.isEmpty { announceSessions() }
+    announceActivity()
   }
 
   private func end(_ session: GatewaySession, announce: Bool = true) {
     sessions.removeAll { $0 === session }
     session.end()
     if announce { announceSessions() }
+  }
+
+  private func announceActivity() {
+    let active = running && (sessions.contains { !$0.proxies.isEmpty } || !runs.isEmpty || openCount > 0)
+    guard active != announcedActive else { return }
+    announcedActive = active
+    emit("gateway.activity", ["active": active])
   }
 
   private func announceSessions() {
@@ -312,6 +323,7 @@ final class Gateway {
   func runReply(request: String, result: Any?, error: [String: Any]?) {
     queue.async { [self] in
       guard let answer = runs.removeValue(forKey: request) else { return }
+      announceActivity()
       guard let error else { return answer(200, ["result": result ?? NSNull()]) }
       let code = error["code"] as? String ?? "failed"
       answer(Self.runStatus[code] ?? 500, ["error": Self.runStatus[code] == nil ? "failed" : code, "message": error["message"] as? String ?? ""])
@@ -329,8 +341,11 @@ final class Gateway {
     }
     let id = GatewayTokens.random(bytes: 12)
     runs[id] = reply
+    announceActivity()
     queue.asyncAfter(deadline: .now() + Self.runDeadline) { [weak self] in
-      self?.runs.removeValue(forKey: id)?(500, ["error": "failed", "message": "Ardia didn't answer in time."])
+      guard let self, let answer = self.runs.removeValue(forKey: id) else { return }
+      self.announceActivity()
+      answer(500, ["error": "failed", "message": "Ardia didn't answer in time."])
     }
     emit("gateway.run", ["request": id, "profile": session.profileId, "command": command, "arg": arg, "window": query["window"] ?? NSNull()])
   }
@@ -353,7 +368,19 @@ final class Gateway {
   private func openTab(_ session: GatewaySession, _ url: String, _ background: Bool, _ done: @escaping (String?) -> Void) -> Bool {
     guard opens.values.filter({ $0.session === session }).count < Self.maxOpensPerSession else { return false }
     let id = GatewayTokens.random(bytes: 12)
-    opens[id] = (session, Date().addingTimeInterval(Self.openDeadline), done)
+    openCount += 1
+    announceActivity()
+    var finished = false
+    let finish: (String?) -> Void = { [weak self] target in
+      guard !finished else { return }
+      finished = true
+      if let self {
+        self.openCount -= 1
+        self.announceActivity()
+      }
+      done(target)
+    }
+    opens[id] = (session, Date().addingTimeInterval(Self.openDeadline), finish)
     queue.asyncAfter(deadline: .now() + Self.openDeadline) { [weak self] in
       guard let self, let open = self.opens.removeValue(forKey: id) else { return }
       self.lateOpens[id] = open.session.profileId
@@ -393,8 +420,12 @@ final class Gateway {
       let proxy = GatewayProxy(session: session, client: client, upstream: upstream, scope: scope, page: page) { [weak self] session, url, background, done in
         self?.openTab(session, url, background, done) ?? false
       }
-      proxy.onClose = { [weak proxy] in session.proxies.removeAll { $0 === proxy } }
+      proxy.onClose = { [weak self, weak proxy] in
+        session.proxies.removeAll { $0 === proxy }
+        self?.announceActivity()
+      }
       session.proxies.append(proxy)
+      announceActivity()
       proxy.start()
     }
   }

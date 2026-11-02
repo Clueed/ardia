@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 const { useBrowser } = await import("../browser/store.ts");
 const model = await import("../browser/model.ts");
-const { useCli, useCliIndicator } = await import("../app/cliControl.ts");
 const { SESSION_COMMANDS, planSessionRun, runSessionCommand, startSessionRuns } = await import("./sessionRun.ts");
 const { isAutomatable } = await import("./automationCommands.ts");
 const stub = await import("../../test-native/index.ts");
@@ -73,16 +72,13 @@ test("newTab opens in the session's profile, in the background for an agent", ()
   assert.equal(S().windows[w].profileId, "default");
 });
 
-test("a gateway run answers through runReply and shows the pill while it runs", async () => {
+test("a gateway run answers through runReply", async () => {
   const { w } = setup();
-  useCli.setState({ server: { state: "on", connections: 0, generation: 1, file: "" } });
-  useCliIndicator.setState({ shown: false });
   startSessionRuns();
   stub.gatewayRunReplies.length = 0;
   stub.emitEvent("gateway.run", { request: "r1", profile: "default", command: "nextTab", arg: null, window: null });
   stub.emitEvent("gateway.run", { request: "r2", profile: "default", command: "setAppearance", arg: "dark", window: null });
   stub.emitEvent("gateway.run", { request: "r3", profile: "default", command: "nextTab", arg: null, window: "nope" });
-  assert.equal(useCliIndicator.getState().shown, true);
   for (let i = 0; i < 10 && stub.gatewayRunReplies.length < 3; i++) await new Promise((r) => setTimeout(r, 0));
   assert.deepEqual(stub.gatewayRunReplies.map((r) => [r.request, r.result ?? r.error.code]), [
     ["r1", { ok: true }],
@@ -91,5 +87,4 @@ test("a gateway run answers through runReply and shows the pill while it runs", 
   ]);
   assert.notEqual(S().settings.appearance, "dark");
   assert.ok(w);
-  useCli.setState({ server: { state: "off", connections: 0, generation: 2, file: "" } });
 });

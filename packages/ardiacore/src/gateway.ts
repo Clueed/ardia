@@ -16,4 +16,6 @@ export type GatewayRun = { request: string; profile: string; command: string; ar
 
 export type GatewayRunReply = { request: string; result: unknown } | { request: string; error: { code: string; message: string } };
 
+export type GatewayActivity = { active: boolean };
+
 export type GatewayCloseTab = { tabId: string; profile: string };

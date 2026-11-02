@@ -8,7 +8,6 @@ import { mainWindowFor } from "../windows/small";
 import { automationDecision, isCatalogCommand, variantsOf } from "./automationCommands";
 import { failure, type MethodError } from "./automationMethods";
 import { onGatewayRun, replyGatewayRun, type GatewayRun } from "../../platform/gateway";
-import { noteSocketRun } from "../app/cliControl";
 import { errorText } from "../../lib/errors";
 
 type GatewayRunBody = { result: { ok: true } } | { error: MethodError };
@@ -106,10 +105,5 @@ let started = false;
 export function startSessionRuns() {
   if (started) return;
   started = true;
-  onGatewayRun((run) => {
-    noteSocketRun(1);
-    void replyGatewayRun({ request: run.request, ...answer(run) })
-      .catch(() => {})
-      .finally(() => noteSocketRun(-1));
-  });
+  onGatewayRun((run) => void replyGatewayRun({ request: run.request, ...answer(run) }).catch(() => {}));
 }
