@@ -9,7 +9,7 @@ import sys
 import traceback
 
 from ardia_cli import guard
-from ardia_cli.endpoint import NOT_REACHABLE, Endpoint, EndpointError
+from ardia_cli.endpoint import Endpoint, EndpointError, lost_error
 from ardia_cli.redact import redact
 
 PAGE_SCHEMES = ("http:", "https:", "about:", "data:", "blob:")
@@ -108,18 +108,18 @@ class Session:
         except NoValidTabFound:
             pass
         except Exception as error:
-            raise EndpointError(self._unreachable(error)) from None
+            raise await self._unreachable(error) from None
 
-    def _unreachable(self, error: BaseException) -> str:
+    async def _unreachable(self, error: BaseException) -> EndpointError:
         if self.endpoint.explicit:
             detail = str(error) or type(error).__name__
-            return redact(f"can't connect to {self.endpoint.source} ({detail})")
-        return NOT_REACHABLE
+            return EndpointError(redact(f"can't connect to {self.endpoint.source} ({detail})"))
+        return await asyncio.to_thread(lost_error, self.endpoint)
 
-    def lost(self) -> str:
+    async def lost(self) -> EndpointError:
         if self.endpoint.explicit:
-            return redact(f"lost the connection to {self.endpoint.source}")
-        return NOT_REACHABLE
+            return EndpointError(redact(f"lost the connection to {self.endpoint.source}"))
+        return await asyncio.to_thread(lost_error, self.endpoint)
 
     def browser_socket(self):
         return self.browser._connection_handler._ws_connection
@@ -271,6 +271,9 @@ def build_namespace(session: Session, filename: str, data_root=None) -> dict:
     async def pinned():
         return await browsing.run_bounded(browsing.pinned, data_root)
 
+    async def open_tabs(profile: str | None = None):
+        return await browsing.run_bounded(browsing.open_tabs, data_root, profile=profile)
+
     async def history(days: float = 1, limit: int | None = 200, profile: str | None = None, domains: bool = False):
         return await browsing.run_bounded(browsing.history, data_root, days=days, limit=limit, profile=profile, domains=domains)
 
@@ -312,6 +315,7 @@ def build_namespace(session: Session, filename: str, data_root=None) -> dict:
     namespace["ControlUnreachable"] = control.Unreachable
     namespace["js"] = js
     namespace["pinned"] = pinned
+    namespace["open_tabs"] = open_tabs
     namespace["history"] = history
     namespace["BrowsingDataError"] = browsing.BrowsingDataError
     namespace["NoPageTab"] = NoPageTab
@@ -358,7 +362,7 @@ async def run_code(source: str, filename: str, endpoint: Endpoint, timeout: floa
             if running in done:
                 return running.result()
             if closed is not None and closed in done:
-                raise EndpointError(session.lost())
+                raise await session.lost()
             raise ExecTimeout(f"timed out after {timeout:g}s")
         finally:
             for task in (running, closed):

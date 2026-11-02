@@ -12,6 +12,17 @@ from ardia_cli.redact import add_secret
 NOT_REACHABLE = (
     "Ardia isn't running, or \"Let the ardia command control Ardia\" is off in Settings."
 )
+NO_SESSION = (
+    "Connect first: run `ardia connect --new NAME` (a profile of your own) or `ardia connect NAME` (an existing one), "
+    "then pass --session ID or set $ARDIA_SESSION."
+)
+SESSION_ENDED = (
+    "That session has ended (ardia disconnect, Ardia quit, control turned off, or 30 minutes idle) or never existed: "
+    "run `ardia connect` again."
+)
+ROUTE_TIMEOUT = 5
+UNREACHABLE_EXIT = 2
+SESSION_EXIT = 6
 CONTROL_FILE = "ArdiaControl.json"
 INSTALLED_DATA_DIR = Path.home() / "Library" / "Application Support" / "com.ardia.browser"
 _BROWSER_PATH = re.compile(r"^/devtools/browser/[0-9A-Za-z-]{1,128}$")
@@ -23,6 +34,16 @@ class EndpointError(Exception):
     pass
 
 
+class SessionError(EndpointError):
+    pass
+
+
+class RouteError(Exception):
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
 @dataclass(frozen=True)
 class Endpoint:
     ws: str
@@ -31,7 +52,21 @@ class Endpoint:
     active: str | None = None
 
 
-def resolve(ws: str | None = None, port: int | None = None, data_dir: str | None = None) -> Endpoint:
+@dataclass(frozen=True)
+class Control:
+    port: int
+    browser: str
+    token: str
+
+    def url(self, route: str, **params) -> str:
+        return f"http://127.0.0.1:{self.port}/ardia/{route}?{query(**params)}"
+
+
+def query(**params) -> str:
+    return "&".join(f"{key}={quote(str(value), safe='')}" for key, value in params.items())
+
+
+def resolve(ws: str | None = None, port: int | None = None, data_dir: str | None = None, session: str | None = None) -> Endpoint:
     if ws:
         return _from_ws(ws, "--ws")
     if port is not None:
@@ -39,7 +74,25 @@ def resolve(ws: str | None = None, port: int | None = None, data_dir: str | None
     env_ws = os.environ.get("ARDIA_CDP_URL")
     if env_ws:
         return _from_ws(env_ws, "ARDIA_CDP_URL")
-    return from_control_file(data_root(data_dir) / "Chromium" / CONTROL_FILE)
+    return from_control_file(data_root(data_dir) / "Chromium" / CONTROL_FILE, session_id(session))
+
+
+def session_id(session: str | None = None) -> str | None:
+    value = session if session is not None else os.environ.get("ARDIA_SESSION")
+    value = (value or "").strip()
+    if not value:
+        return None
+    add_secret(value)
+    if not _TOKEN.match(value):
+        raise SessionError(SESSION_ENDED)
+    return value
+
+
+def require_session(session: str | None) -> str:
+    value = session_id(session)
+    if value is None:
+        raise SessionError(NO_SESSION)
+    return value
 
 
 def data_root(data_dir: str | None = None) -> Path:
@@ -52,8 +105,8 @@ def explicit_data_root(data_dir: str | None = None) -> Path | None:
     return Path(root).expanduser() if root else None
 
 
-def require_control(root: Path) -> Endpoint:
-    return from_control_file(root / "Chromium" / CONTROL_FILE)
+def require_control(root: Path) -> Control:
+    return read_control(root / "Chromium" / CONTROL_FILE)
 
 
 def _from_ws(url: str, source: str) -> Endpoint:
@@ -87,7 +140,14 @@ def _reason(error: Exception) -> str:
     return str(reason or error) or type(error).__name__
 
 
-def from_control_file(path: Path) -> Endpoint:
+def from_control_file(path: Path, session: str | None) -> Endpoint:
+    control = read_control(path)
+    if session is None:
+        raise SessionError(NO_SESSION)
+    return Endpoint(f"ws://127.0.0.1:{control.port}{control.browser}?{query(token=session)}", str(path), False, control.url("active", token=session))
+
+
+def read_control(path: Path) -> Control:
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
@@ -125,13 +185,70 @@ def from_control_file(path: Path) -> Endpoint:
     add_secret(token)
     if not (isinstance(pid, int) and pid > 1 and _alive(pid)):
         raise EndpointError(NOT_REACHABLE)
-    query = f"token={quote(token, safe='')}"
-    return Endpoint(
-        f"ws://127.0.0.1:{port}{browser}?{query}",
-        str(path),
-        False,
-        f"http://127.0.0.1:{port}/ardia/active?{query}",
-    )
+    return Control(port, browser, token)
+
+
+def get_json(url: str, timeout: float = ROUTE_TIMEOUT):
+    import urllib.error
+    import urllib.request
+
+    direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with direct.open(url, timeout=timeout) as response:
+            raw = response.read(_MAX_CONTROL_FILE)
+    except urllib.error.HTTPError as error:
+        code = None
+        try:
+            body = json.loads(error.read(_MAX_CONTROL_FILE))
+            code = body.get("error") if isinstance(body, dict) else None
+        except Exception:
+            pass
+        finally:
+            error.close()
+        raise RouteError(code if isinstance(code, str) and code else f"http-{error.code}") from None
+    except Exception:
+        raise EndpointError(NOT_REACHABLE) from None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        raise EndpointError(NOT_REACHABLE) from None
+
+
+def control_call(control: Control, route: str, **params) -> dict:
+    try:
+        answer = get_json(control.url(route, token=control.token, **params))
+    except RouteError as error:
+        if error.code == "http-404":
+            raise EndpointError(NOT_REACHABLE) from None
+        raise
+    if not isinstance(answer, dict):
+        raise EndpointError(NOT_REACHABLE)
+    return answer
+
+
+def session_call(control: Control, session: str, route: str, **params):
+    try:
+        return get_json(control.url(route, token=session, **params))
+    except RouteError as error:
+        if error.code == "http-404":
+            raise SessionError(SESSION_ENDED) from None
+        raise
+
+
+def session_gone(endpoint: Endpoint) -> bool:
+    if endpoint.explicit or not endpoint.active:
+        return False
+    try:
+        get_json(endpoint.active, timeout=2)
+    except RouteError as error:
+        return error.code == "http-404"
+    except EndpointError:
+        return False
+    return False
+
+
+def lost_error(endpoint: Endpoint) -> EndpointError:
+    return SessionError(SESSION_ENDED) if session_gone(endpoint) else EndpointError(NOT_REACHABLE)
 
 
 def _alive(pid: int) -> bool:

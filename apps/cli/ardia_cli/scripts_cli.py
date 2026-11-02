@@ -38,7 +38,8 @@ in the page's world) until it's truthy. The tab closes at the end unless --keep.
 a warning.
 
 Exit status: 0 the script ran without uncaught exceptions and --expect was truthy, 1 otherwise (build error, the
-page didn't match, an exception, a falsy --expect), 2 Ardia can't be reached.
+page didn't match, an exception, a falsy --expect), 2 Ardia can't be reached, 6 no session or it ended (run
+ardia connect and pass --session ID or set $ARDIA_SESSION).
 
 Examples:
   ardia scripts test hide-sidebar.user.ts
@@ -94,6 +95,7 @@ def add_parser(commands, formatter):
     test.add_argument("--keep", action="store_true", help="leave the tab open")
     test.add_argument("--json", action="store_true", help="print the report as JSON")
     add_endpoint_arguments(test)
+    test.add_argument("--session", metavar="ID", help="the session from ardia connect (default: $ARDIA_SESSION)")
 
     install = sub.add_parser("install", help="install a script so Ardia runs it", description=INSTALL_DESCRIPTION, formatter_class=formatter)
     install.add_argument("file", metavar="FILE", help="the .ts or .js userscript")
@@ -183,7 +185,7 @@ def test(args) -> int:
     import asyncio
 
     from ardia_cli import scripts_test
-    from ardia_cli.endpoint import EndpointError, data_root, resolve
+    from ardia_cli.endpoint import SESSION_EXIT, EndpointError, SessionError, data_root, resolve
     from ardia_cli.userscript import ScriptError, build, default_url, url_runs
 
     try:
@@ -198,8 +200,11 @@ def test(args) -> int:
     if not url_runs(built.meta, url):
         built.meta.warnings.append(f"{url} doesn't match the script's @match/@include rules, so it won't run there")
     try:
-        endpoint = resolve(ws=args.ws, port=args.port, data_dir=args.data_dir)
+        endpoint = resolve(ws=args.ws, port=args.port, data_dir=args.data_dir, session=args.session)
         report = asyncio.run(scripts_test.run_test(built, url, endpoint, args.expect, args.wait, args.screenshot, args.keep))
+    except SessionError as error:
+        complain(f"ardia: {error}")
+        return SESSION_EXIT
     except EndpointError as error:
         complain(f"ardia: {error}")
         return 2

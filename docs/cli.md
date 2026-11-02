@@ -17,19 +17,46 @@ the pins into `pyproject.toml`).
 
 ## Commands
 
-- `ardia exec [CODE | -] [-f FILE] [--data-dir DIR] [--port N] [--ws URL] [--timeout S] [--json]` runs Python with
-  top-level `await`. In scope: `browser` (pydoll `Chrome`), `tab` (the page shown in Ardia's last focused window,
-  from `GET /ardia/active?token=…` on the token path, so it holds while the window is covered; `--port`/`--ws` test
+- `ardia profiles [--json] [--data-dir DIR]` lists every profile from `GET /ardia/profiles?token=CONTROL`: one line
+  each, `Work (real)` or `LinkedIn (agent, 2 connected)`, or `{"profiles":[{"name","kind","connected"}]}` with
+  `--json` (`kind` `real` or `agent`, `connected` the number of live sessions). Exit 0, or 2 unreachable.
+- `ardia connect NAME | --new NAME [--agent NAME] [--json] [--data-dir DIR]` asks for a session
+  (`/ardia/connect?token=CONTROL&agent=…&profile=NAME`, or `&new=NAME`). The agent name is `--agent`, else
+  `$ARDIA_AGENT`, else `agent`; it's self-declared and only shown to the owner. `--new` makes an agent profile with no
+  prompt; `NAME` is any existing profile and needs the owner's Allow, so it prints `Waiting for you to allow it in
+  Ardia…` on stderr. Then it polls `&request=ID` every 250 ms for at most 120 s. Allowed: stdout gets only the session
+  token (with `--json`, `{"session","profile","kind"}`), the one place a token is printed. Exit 1 `no-such-profile`,
+  `name-taken` (for `--new`) or `bad-name` (empty, over 60 characters, control characters), each as one plain line;
+  2 unreachable (also when the control token is unknown, 404); 4 denied; 5 expired or no answer (past its own
+  120 s it sends `&cancel=1`); 130 Ctrl-C, after sending `&cancel=1` (2 s deadline).
+- `ardia disconnect [--session ID] [--data-dir DIR]` (`/ardia/disconnect?token=SESSION`) ends the session and closes
+  its sockets; prints `disconnected`.
+- `ardia rename NAME [--session ID] [--data-dir DIR]` (`/ardia/rename?token=SESSION&name=NAME`) renames the session's
+  agent profile; prints `renamed to NAME`. Exit 1 for `not-agent` (a real profile), `bad-name` or `name-taken`.
+- `exec`, `scripts test`, `disconnect` and `rename` take the session from `--session ID`, else `$ARDIA_SESSION`; there's
+  no "most recent" default. On the token path, without one they print one line (`Connect first: run ardia connect
+  --new NAME … then pass --session ID or set $ARDIA_SESSION.`) and exit 6. A session Ardia doesn't know (ended by
+  `disconnect`, quit, control off or 30 minutes idle, or mistyped) also exits 6 with `That session has ended …`:
+  `disconnect` and `rename` get a 404; `exec` and `scripts test` ask `/ardia/active` after the browser socket fails
+  to open or drops, and a 404 there means the session, anything else the exit-2 line. `--port`, `--ws` and
+  `$ARDIA_CDP_URL` need no session and ignore one. All of these find Ardia through `ArdiaControl.json` (below), with
+  the same checks and exit 2.
+- `ardia exec [CODE | -] [-f FILE] [--session ID] [--data-dir DIR] [--port N] [--ws URL] [--timeout S] [--json]` runs
+  Python with top-level `await`. In scope: `browser` (pydoll `Chrome`), `tab` (from `GET /ardia/active?token=SESSION`
+  on the token path: the page shown for the session's profile in the last focused window that shows it, else the
+  newest page the session made that's still open, so it holds while the window is covered; `--port`/`--ws` test
   servers fall back to visible and focused, else visible; with no page, as on New Tab, it's a placeholder that raises
-  `NoPageTab` on first use), `tabs` (http, https, about, data and blob pages, plus what `new_tab` opens, minus
+  `NoPageTab` on first use), `tabs` (the session's profile only, which the engine enforces; http, https, about, data
+  and blob pages, plus what `new_tab` opens, minus
   the New Tab's prewarmed `about:blank`: on the token path every `about:blank` that isn't the active page, on test
   servers the hidden ones),
-  `new_tab(url, background=True)`, `js(expression, tab=None)` (default: `tab`, else the last `new_tab`), `await pinned()`,
+  `new_tab(url, background=True)` (in the session's profile), `js(expression, tab=None)` (default: `tab`, else the last
+  `new_tab`), `await pinned()`, `await open_tabs(profile=None)`,
   `await history(days=1, limit=200, profile=None, domains=False)` (see Browsing data), `await run(command, arg=None,
   window=None)`, `await windows()` and `async for e in events(*names)` (see `docs/automation.md`), `By`, `Key`,
   `asyncio`, pydoll's exports and its common exceptions. It prints the last expression's value. Exit 0 done, 1 the
   code raised or timed out (default 300 s), 2 Ardia can't be reached or closed the browser socket (it watches the
-  socket, so turning the setting off ends an idle run at once), 130 interrupted.
+  socket, so turning the setting off ends an idle run at once), 6 no session or it ended, 130 interrupted.
 - `ardia skills install --target general|codex|claude-code|cursor|opencode [--target …] [--project]` installs the
   agent skill (`ardia_cli/skill`: `SKILL.md` and `references/pydoll.md`) into `~/.agents/skills` (general, codex),
   `~/.claude/skills`, `~/.cursor/skills` or `~/.config/opencode/skills`; with `--project`, into `./.agents/skills`,
@@ -59,7 +86,7 @@ ignoring `http_proxy`, `ws_proxy` and the like, so no proxy sees the token.
 
 ## Browsing data
 
-For daily reports, `exec` has two helpers that read files in Ardia's data dir. They're coroutines that run in a daemon
+For daily reports, `exec` has three helpers that read files in Ardia's data dir. They're coroutines that run in a daemon
 thread with one 20 s deadline from the call (the session read, the snapshot, every SQLite connection through a
 progress handler that aborts past it, row fetching capped at 200,000), so the event loop and the browser socket stay
 live (`await history()`; a bare last expression is awaited anyway), `exec --timeout` returns promptly even if a call
@@ -69,15 +96,24 @@ then deletes any temp folder still registered. The data dir is the token path's
 (`--data-dir`, `$ARDIA_DATA_DIR`, else the installed app's); with `--port`, `--ws` or `$ARDIA_CDP_URL` it's only
 `--data-dir` or `$ARDIA_DATA_DIR`, and without one they raise `BrowsingDataError`. Both run the same
 `ArdiaControl.json` checks as the token path first (regular file, owned, 0600, live pid), so they work only while
-Ardia runs with control on. Neither reads cookies, passwords, Login Data or Web Data.
+Ardia runs with control on. None reads cookies, passwords, Login Data or Web Data. They cover the owner's real
+profiles whatever profile the session is in, and skip agent profiles (`session.json` profiles with
+`"kind": "agent"`): their pins, tabs and history never show up.
 
 - `await pinned()` reads `<data dir>/session.json` (the app's persisted state, `apps/browser/src/state/session/persist.ts`) and returns
   one dict per pin: `title` (custom title first), `url` (else the pinned URL), `pinned_url`, `kind` (`favorite` for a
   tile, `pinned` for a tab in a pinned folder), `folder`, `profile` (its name) and `parked` (pins of a profile no
   window shows, from `parkedPins`). Pins mirrored across windows count once. Incognito profiles are skipped.
-- `await history(days=1, limit=200, profile=None, domains=False)` reads Chromium's `History` for each `Default` and
-  `Profile <id>` folder under `<data dir>/Chromium/` (never incognito, guest or system profiles; `profile` must be a
-  profile name or one of those folder names, never a path). Rows per URL, newest first: `url`, `title`, `visits` in
+- `await open_tabs(profile=None)` reads the same `session.json` and returns one dict per open tab, in window and
+  sidebar order: `url` (else the pinned URL; tabs without one are left out), `title` (custom title first), `profile`
+  (its name), `pinned` (a favorite or a tab in a pinned folder). Incognito windows and profiles are skipped; a pin
+  mirrored across windows counts once, other tabs once per id. `profile` is a profile name or id; an unknown or agent
+  one raises `BrowsingDataError` listing the known names. No page is touched.
+- `await history(days=1, limit=200, profile=None, domains=False)` reads Chromium's `History` for each real profile's
+  folder under `<data dir>/Chromium/` (`Default` for data id `default`, else `Profile <dataId>`; folders no real
+  profile in `session.json` names, agent ones included, are skipped, and without a `profiles` map only `Default` is
+  read; never incognito, guest or system profiles; `profile` must be a profile name or one of those folder names,
+  never a path). Rows per URL, newest first: `url`, `title`, `visits` in
   the window, `total_visits`, `last_visit` (ISO 8601, local time), `profile`. Only http(s) pages; subframe
   navigations and hidden URLs are left out. `domains=True` rolls rows up per domain (`domain`, `visits`, `pages`,
   `last_visit`, `top_title`, `profile`), most visited first. It never touches the live file for writing: it opens it
@@ -118,8 +154,9 @@ looks in the cwd.
 
 - `ardia scripts new NAME [--match PATTERN]…` writes `NAME.user.ts` in the cwd (default match
   `https://example.com/*`), never over an existing file.
-- `ardia scripts test FILE [--url URL] [--expect JS] [--wait S] [--screenshot PATH] [--keep] [--json] [--data-dir DIR]
-  [--port N] [--ws URL]` finds Ardia like `exec` (same exit 2), opens its own background target at `about:blank`,
+- `ardia scripts test FILE [--url URL] [--expect JS] [--wait S] [--screenshot PATH] [--keep] [--json] [--session ID]
+  [--data-dir DIR] [--port N] [--ws URL]` finds Ardia like `exec` (same exit 2 and 6, same session), opens its own
+  background target in the session's profile at `about:blank`,
   attaches a flat session, turns on Runtime and Page, registers the script with `Page.addScriptToEvaluateOnNewDocument`
   (no `worldName`: the token policy refuses named worlds), and only then navigates to `--url` (default: the first
   `@match` whose host has no wildcard, path up to its first `*`). The registered source is a wrapper around the
@@ -144,7 +181,8 @@ looks in the cwd.
   first pass that starts and never finishes, in any frame, fails the test; when the top frame's doesn't finish in 30 s
   the test stops there. Then, in a bounded cleanup, it removes the registration and
   closes the target it made, unless `--keep`. `@inject-into content` is tested in the page's world, with a warning.
-  Exit 0 ran without uncaught exceptions and `--expect` truthy, 1 otherwise, 2 Ardia unreachable.
+  Exit 0 ran without uncaught exceptions and `--expect` truthy, 1 otherwise, 2 Ardia unreachable, 6 no session or it
+  ended.
 - `ardia scripts install FILE [--data-dir DIR]`, `ardia scripts uninstall NAME [--data-dir DIR]` (by `@name` or id),
   `ardia scripts list [--json] [--data-dir DIR]`. Install and uninstall need control on (the `ArdiaControl.json`
   checks, else the exit-2 line); list doesn't.
@@ -197,17 +235,24 @@ The data dir is `--data-dir`, else `$ARDIA_DATA_DIR`, else `~/Library/Applicatio
 4. `<data dir>/Chromium/ArdiaControl.json`, with `--data-dir` or `$ARDIA_DATA_DIR`, else the installed app's
    `~/Library/Application Support/com.ardia.browser/Chromium/ArdiaControl.json`.
 
-The active-page route is `GET http://127.0.0.1:P/ardia/active?token=<token>`: `{"targetId": "<id>"}`, or `null` when
-New Tab or an Ardia view is showing; anything else is a 404. The CLI calls it directly (no proxy, no Origin header)
-with the token redacted like everywhere else, and falls back to the visibility check if it fails.
-
 The app writes `ArdiaControl.json` when the setting is on:
 `{"port":P,"browser":"/devtools/browser/<guid>","token":"…","pid":…,"generation":N}`. The CLI opens it without
-following links and trusts it only when it's a regular file the user owns, mode 0600, and `pid` is alive. It connects
-to `ws://127.0.0.1:P<browser>?token=<token>`; pydoll keeps the query on every `/devtools/page/<id>` URL, so page
-sockets carry the token too. A missing, stale or unsafe file, or a refused connection, prints one line and exits 2:
+following links and trusts it only when it's a regular file the user owns, mode 0600, and `pid` is alive. Its `token`
+is the control token: the engine takes it only on `/ardia/profiles` and `/ardia/connect`, never on a WebSocket or
+`/ardia/active`. Everything else uses the session token from `connect` (`[\x21-\x7e]{16,1024}`, else the
+session-ended line): `exec` connects to `ws://127.0.0.1:P<browser>?token=<session>`; pydoll keeps the query on every
+`/devtools/page/<id>` URL, so page sockets carry it too. The engine scopes that socket to the session's Chromium
+profile (targets listed, attached and created there only).
+
+The routes are `GET http://127.0.0.1:P/ardia/<route>?token=…&…` with every value percent-encoded, a JSON body, and
+errors as 4xx `{"error": "<code>"}`; a 404 without a code is an unknown token (exit 2 for the control token, 6 for a
+session). The CLI calls them directly (no proxy, no Origin header, 5 s timeout) with tokens redacted like everywhere
+else. The active-page route `/ardia/active?token=<session>` answers `{"targetId": "<id>"}`, or `null` when New Tab or
+an Ardia view is showing; when it fails, `exec` falls back to the visibility check. A missing, stale or unsafe file, or a refused connection, prints one line and exits 2:
 `Ardia isn't running, or "Let the ardia command control Ardia" is off in Settings.` There's no port scanning and no
-`/json` fallback on this path. The token never reaches the output: stdout and stderr are redacted as a stream (a token
+`/json` fallback on this path. Neither token reaches the output (both are registered the moment they're read, the
+session one before anything connects), except the session token `connect` prints as its result, written past the
+redaction: stdout and stderr are redacted as a stream (a token
 split across writes is held back until it's complete), and so are log records and everything a logging handler
 formats, tracebacks included. pydoll's loggers stay at ERROR. The stream holds back only a tail that could start a
 registered token and releases everything on `flush()`, at exit and on SIGTERM or SIGHUP (exit 143). A token printed in
@@ -289,5 +334,7 @@ helpers need the token path: an instance launched without `ARDIA_REMOTE_DEBUGGIN
 control server when the port switch is set) and with control on, for example a scratch dir whose `session.json` has
 `"settings": {"cliControl": true}`, opened with `open -g -n --env ARDIA_BACKGROUND=1 --env ARDIA_DATA_DIR=<dir>`.
 Unit tests (matching parity with node, import confinement, store rollback and recovery, symlink refusal; config
-and theme commands against hand-written schemas in `tests/fixtures` that use every keyword of the subset):
-`python -m unittest discover -s apps/cli/tests` with the locked dependencies installed.
+and theme commands against hand-written schemas in `tests/fixtures` that use every keyword of the subset; connect
+allowed, denied, expired and cancelled, session refusal and redaction against a fake control server, agent-profile
+filtering in the helpers):
+`uv run --no-project --python 3.13 --with-requirements apps/cli/requirements.lock python -m unittest discover -s apps/cli/tests`.

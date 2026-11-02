@@ -172,9 +172,20 @@ def is_private(profile_id: str) -> bool:
     return not isinstance(profile_id, str) or profile_id.startswith("incognito:")
 
 
+def is_agent(profile: dict) -> bool:
+    return profile.get("kind") == "agent"
+
+
 def profile_names(session: dict) -> dict[str, str]:
     profiles = session.get("profiles") or {}
-    return {pid: (p.get("name") or pid) for pid, p in profiles.items() if isinstance(p, dict) and not is_private(pid)}
+    if not isinstance(profiles, dict):
+        return {}
+    return {pid: (p.get("name") or pid) for pid, p in profiles.items() if isinstance(p, dict) and not is_private(pid) and not is_agent(p)}
+
+
+def profile_order(session: dict, names: dict[str, str]) -> list[str]:
+    listed = [pid for pid in session.get("profileOrder") or [] if pid in names]
+    return list(dict.fromkeys(listed + list(names)))
 
 
 def pinned(root: Path | None, deadline: float | None = None) -> list[dict]:
@@ -182,7 +193,7 @@ def pinned(root: Path | None, deadline: float | None = None) -> list[dict]:
     root = checked_root(root, "pinned")
     session = read_session(root, deadline)
     names = profile_names(session)
-    order = [pid for pid in session.get("profileOrder") or [] if pid in names] + [pid for pid in names if pid not in (session.get("profileOrder") or [])]
+    order = profile_order(session, names)
     tabs = {t["id"]: t for t in session.get("tabs") or [] if isinstance(t, dict) and "id" in t}
     groups = [g for g in session.get("groups") or [] if isinstance(g, dict)]
     pinned_groups = {tab_id: g for g in groups if g.get("pinned") for tab_id in g.get("tabIds") or []}
@@ -234,14 +245,50 @@ def pinned(root: Path | None, deadline: float | None = None) -> list[dict]:
     return [row for _, row in sorted(rows, key=lambda item: item[0])]
 
 
+def open_tabs(root: Path | None, profile: str | None = None, deadline: float | None = None) -> list[dict]:
+    deadline = deadline if deadline is not None else time.monotonic() + HISTORY_BUDGET
+    root = checked_root(root, "open_tabs")
+    session = read_session(root, deadline)
+    names = profile_names(session)
+    if profile is not None:
+        chosen = {pid for pid, name in names.items() if profile in (pid, name)}
+        if not chosen:
+            known = ", ".join(sorted(set(names.values()))) or "none"
+            raise BrowsingDataError(f"no profile named {profile!r} (known: {known})")
+    else:
+        chosen = set(names)
+    tabs = {t["id"]: t for t in session.get("tabs") or [] if isinstance(t, dict) and "id" in t}
+    pinned_ids = {tab_id for g in session.get("groups") or [] if isinstance(g, dict) and g.get("pinned") for tab_id in g.get("tabIds") or []}
+    seen: set = set()
+    rows = []
+    for window in session.get("windows") or []:
+        if not isinstance(window, dict) or window.get("incognito"):
+            continue
+        for tab_id in window.get("tabIds") or []:
+            tab = tabs.get(tab_id)
+            if not isinstance(tab, dict):
+                continue
+            profile_id = tab.get("profileId", "")
+            url = tab.get("url") or tab.get("pinnedUrl") or ""
+            pinned = bool(tab.get("pinned")) or tab_id in pinned_ids
+            key = (profile_id, tab.get("pinKey") or tab_id) if pinned else (profile_id, tab_id)
+            if is_private(profile_id) or profile_id not in chosen or not url or key in seen:
+                continue
+            seen.add(key)
+            rows.append({"url": url, "title": tab.get("customTitle") or tab.get("title") or url, "profile": names[profile_id], "pinned": pinned})
+    return rows
+
+
 def profile_dirs(root: Path, session: dict) -> list[tuple[str, Path]]:
     chromium = root / "Chromium"
     names = profile_names(session)
-    profiles = session.get("profiles") or {}
+    profiles = session.get("profiles")
     by_dir: dict[str, str] = {}
     for pid, name in names.items():
         data_id = (profiles.get(pid) or {}).get("dataId") or pid
         by_dir["Default" if data_id == DEFAULT_PROFILE_ID else f"Profile {data_id}"] = name
+    if not isinstance(profiles, dict):
+        by_dir["Default"] = "Default"
     found = []
     try:
         entries = sorted(chromium.iterdir())
@@ -254,12 +301,12 @@ def profile_dirs(root: Path, session: dict) -> list[tuple[str, Path]]:
         suffix = name[len("Profile ") :] if name.startswith("Profile ") else ""
         if any(suffix.lower().startswith(p.lower()) for p in PRIVATE_PREFIXES) or "@" in suffix or ":" in suffix:
             continue
-        if entry.is_symlink() or not entry.is_dir():
+        if name not in by_dir or entry.is_symlink() or not entry.is_dir():
             continue
         history = entry / "History"
         if history.is_symlink() or not history.is_file():
             continue
-        found.append((by_dir.get(name, name), entry))
+        found.append((by_dir[name], entry))
     return found
 
 

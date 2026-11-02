@@ -5,6 +5,36 @@ description: Drive the user's running Ardia browser from the terminal with `ardi
 
 # Driving Ardia with `ardia exec`
 
+## Connect first
+
+Every agent connects before it drives pages, and works inside one profile.
+
+```sh
+ardia profiles
+ardia connect --new research --agent claude-code
+ardia exec --session <ID> 'await tab.title()'
+ardia disconnect --session <ID>
+```
+
+`ardia profiles` lists each profile's name, kind (`real`: the user's, `agent`: made by an agent) and live sessions.
+
+- `ardia connect --new NAME` makes an agent profile of your own (empty, no logins) and connects without a prompt.
+  Use it for anything that doesn't need the user's accounts.
+- `ardia connect NAME` connects to an existing profile, the user's own included, once the user clicks Allow in
+  Ardia. It waits up to 120 s: tell the user you're asking. Exit 4: they denied it; don't ask again unprompted.
+  Exit 5: no answer.
+- `connect` prints only the session id. Pass it on every later call as `--session ID` (`$ARDIA_SESSION` works too,
+  if your shell keeps variables between commands). There's no default session. Treat it like a password: keep it
+  to yourself, out of logs, commits and files the user didn't ask for.
+- `ardia rename NAME --session ID` renames your agent profile; `ardia disconnect --session ID` ends the session.
+  Disconnect when you're done. A session also ends when Ardia quits or after 30 idle minutes; then any command exits
+  6, and you connect again.
+- `--agent NAME` (or `$ARDIA_AGENT`) is the name the user sees in the prompt; use your own (`claude-code`, `codex`).
+
+The examples below leave `--session ID` out; add it to every `ardia exec` and `ardia scripts test`.
+
+## Running code
+
 `ardia exec` runs Python against the Ardia the user has open, with top-level `await`. The value of the last
 expression is printed: strings as they are, anything else as its repr, or JSON with `--json`. Every run is a new
 process, so carry state between runs in a URL or a file, not a variable.
@@ -17,10 +47,11 @@ ardia exec -f script.py
 
 In scope:
 
-- `tab`: the web page the user is looking at when the run starts, even with Ardia's window covered. When they're on
+- `tab`: the session profile's web page the user is looking at when the run starts, even with Ardia's window
+  covered (in an agent profile, the newest page you opened that's still open). When they're on
   New Tab or another Ardia view, any use of `tab` raises `NoPageTab` (and `bool(tab)` is False): open a page with
   `new_tab` instead.
-- `tabs`: every web page tab when the run starts, the user's own included, plus the ones `new_tab` opens.
+- `tabs`: every web page tab of the session's profile when the run starts, plus the ones `new_tab` opens.
 - `new_tab(url, background=True)`: opens a tab in the sidebar, waits for the page to load and returns it.
   `background=False` switches the user to it.
 - `js(expression, tab=None)`: evaluates JavaScript and returns its value. Pass `tab=t` for your own tab; without
@@ -28,7 +59,7 @@ In scope:
 - `browser` (pydoll `Chrome`), `By`, `Key`, `asyncio` and the rest of `pydoll`'s exports.
 
 Exit status: 0 done, 1 your code raised or timed out (`--timeout`, default 300 s), 2 Ardia can't be reached or
-stopped the connection.
+stopped the connection, 6 no session or it ended (connect again).
 On exit 2, tell the user to open Ardia and turn on Settings › "Let the ardia command control Ardia".
 
 ## Etiquette
@@ -126,7 +157,7 @@ so existing `.user.js` files work too. `ardia scripts --help` and each command's
 
 - Start from `ardia scripts new`, or from a script the user already has.
 - Read the real page before writing selectors, and keep the script small and robust to the site changing.
-- Iterate with `ardia scripts test` until it passes cleanly on the pages it targets. It runs in a tab of its own and
+- Iterate with `ardia scripts test FILE --session ID` until it passes cleanly on the pages it targets. It runs in a tab of its own and
   reports what ran, what logged and what threw.
 - Install only once the user is happy with it. `ardia scripts list` and `uninstall` manage what's installed.
 
@@ -195,8 +226,9 @@ yes, ask what they care about most and when they want it, then set it up so it r
 harness's scheduler if it has one, otherwise the system's). Save what you agreed on where the scheduled run can read
 it.
 
-Each report starts from what the user actually uses. `await pinned()` returns their pinned tabs and favorites, and
-`await history()` returns what they visited recently. Visit the sites that matter in tabs of your own, using their
+Each report starts from what the user actually uses. `await pinned()` returns their pinned tabs and favorites,
+`await open_tabs()` their open tabs, and `await history()` what they visited recently, across the user's own
+profiles (never agent profiles), whatever profile your session is in. Visit the sites that matter in tabs of your own, using their
 logins, and only read: never reply, mark as read, accept or send anything. By default the report covers what's
 pending for them and what changed on things they finished or are waiting on since the last report. Shape it around
 their priorities, keep it short, and deliver it the way they asked. Keep enough state between runs to tell new from

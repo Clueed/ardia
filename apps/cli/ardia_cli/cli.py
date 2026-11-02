@@ -2,7 +2,34 @@ import sys
 
 from ardia_cli import __version__
 
-DESCRIPTION = "Control a running Ardia from the terminal."
+DESCRIPTION = """\
+Control a running Ardia from the terminal.
+
+Connect first: ardia connect --new NAME makes a profile of your own (no prompt); ardia connect NAME uses an
+existing one once the owner allows it. Either prints a session id: pass it as --session ID (or $ARDIA_SESSION)
+to exec, scripts test, rename and disconnect.
+"""
+PROFILES_DESCRIPTION = """\
+List Ardia's profiles: name, kind (real: the owner's; agent: made by ardia connect --new) and how many sessions
+are connected to it.
+
+Exit status: 0 done, 2 Ardia can't be reached.
+"""
+CONNECT_DESCRIPTION = """\
+Connect to a profile and print the session id (only that, on stdout; a JSON object with --json).
+
+  ardia connect --new NAME   make an agent profile named NAME and connect to it, without a prompt
+  ardia connect NAME         connect to an existing profile; the owner has to allow it in Ardia (waits up to 120 s)
+
+A session lasts until ardia disconnect, Ardia quits or control is turned off, or 30 minutes without traffic.
+The agent name the owner sees is --agent, else $ARDIA_AGENT, else "agent".
+
+Exit status: 0 connected, 1 no such profile, name taken or a bad name, 2 Ardia can't be reached, 4 the owner
+denied it, 5 no answer in 120 s, 130 interrupted (the request is withdrawn).
+"""
+SESSION_EPILOG = """\
+Exit status: 0 done, 1 Ardia refused it, 2 Ardia can't be reached, 6 no session or it has ended.
+"""
 EXEC_DESCRIPTION = """\
 Run Python against the running Ardia, with top-level await.
 
@@ -12,13 +39,16 @@ In scope:
   tabs           every web page tab (http, https, about, data, blob), plus the ones new_tab opens
   new_tab(url, background=True)   open a tab and return it once the page has loaded
   js(expression, tab=None)        evaluate JavaScript in tab (else the user's tab, else the last new_tab) and return its value
+  await open_tabs(profile=None)
+                 the owner's open tabs from Ardia's saved session, as dicts (url, title, profile, pinned)
   await pinned() the user's favorites and pinned tabs from Ardia's saved session, as dicts
                  (title, url, pinned_url, kind favorite|pinned, folder, profile, parked); no incognito
   await history(days=1, limit=200, profile=None, domains=False)
                  recent history per URL, newest first: url, title, visits (in the window), total_visits,
                  last_visit (ISO, local time), profile; domains=True rolls it up per domain.
                  profile is a profile name or its folder under Chromium/ (default: all). Only http(s) pages.
-                 Both read Ardia's data dir (the token path's, or --data-dir/$ARDIA_DATA_DIR) and need control on.
+                 All three read Ardia's data dir (the token path's, or --data-dir/$ARDIA_DATA_DIR), need control on,
+                 and cover the owner's profiles only, never agent profiles or incognito.
   await run(command, arg=None, window=None)   run one of Ardia's commands (see ardia commands); CommandError if refused
   await windows()                             Ardia's windows and their tabs
   async for e in events(*names)               Ardia's events as they happen (default: all)
@@ -29,9 +59,11 @@ In scope:
 The value of the last expression is printed (strings as is, other values as repr, or JSON with --json).
 Ardia keeps running after every exec.
 
-Exit status: 0 done, 1 the code raised or timed out, 2 Ardia can't be reached or closed the connection, 130 interrupted.
+Exit status: 0 done, 1 the code raised or timed out, 2 Ardia can't be reached or closed the connection, 6 no
+session or it has ended (run ardia connect), 130 interrupted.
 
 Examples:
+  export ARDIA_SESSION=$(ardia connect --new research)
   ardia exec 'await tab.title()'
   ardia exec 't = await new_tab("https://example.com"); await t.title()'
   ardia exec -f script.py --json
@@ -40,7 +72,8 @@ Examples:
 """
 EXEC_EPILOG = """\
 Endpoint: --ws, else --port (plain DevTools servers only), else $ARDIA_CDP_URL, else
-<data dir>/Chromium/ArdiaControl.json with --data-dir or $ARDIA_DATA_DIR, else the installed Ardia's.
+<data dir>/Chromium/ArdiaControl.json with --data-dir or $ARDIA_DATA_DIR, else the installed Ardia's, which needs
+--session ID or $ARDIA_SESSION from ardia connect.
 """
 SKILLS_DESCRIPTION = """\
 Install the ardia agent skill (SKILL.md and a pydoll reference) so coding agents know how to drive Ardia.
@@ -57,7 +90,7 @@ Targets and where they install (user level; --project uses the current directory
 def build_parser():
     import argparse
 
-    parser = argparse.ArgumentParser(prog="ardia", description=DESCRIPTION)
+    parser = argparse.ArgumentParser(prog="ardia", description=DESCRIPTION, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--version", action="version", version=f"ardia {__version__}")
     commands = parser.add_subparsers(dest="command", metavar="<command>")
 
@@ -75,6 +108,28 @@ def build_parser():
     run.add_argument("--ws", metavar="URL", help="a browser WebSocket URL")
     run.add_argument("--timeout", type=float, default=300, metavar="SECONDS", help="stop the code after this long (default 300, 0 for none)")
     run.add_argument("--json", action="store_true", help="print the last value as JSON")
+    run.add_argument("--session", metavar="ID", help="the session from ardia connect (default: $ARDIA_SESSION)")
+
+    data_help = "the Ardia data dir to find (default: $ARDIA_DATA_DIR, else the installed app's)"
+    listing = commands.add_parser("profiles", help="list Ardia's profiles", description=PROFILES_DESCRIPTION, formatter_class=argparse.RawDescriptionHelpFormatter)
+    listing.add_argument("--json", action="store_true", help="print JSON")
+    listing.add_argument("--data-dir", metavar="DIR", help=data_help)
+
+    connect = commands.add_parser("connect", help="connect to a profile and print the session id", description=CONNECT_DESCRIPTION, formatter_class=argparse.RawDescriptionHelpFormatter)
+    connect.add_argument("name", nargs="?", metavar="NAME", help="an existing profile (the owner has to allow it)")
+    connect.add_argument("--new", metavar="NAME", help="make an agent profile named NAME and connect to it")
+    connect.add_argument("--agent", metavar="NAME", help="who is asking, shown to the owner (default: $ARDIA_AGENT, else agent)")
+    connect.add_argument("--json", action="store_true", help="print the session, profile and kind as JSON")
+    connect.add_argument("--data-dir", metavar="DIR", help=data_help)
+
+    disconnect = commands.add_parser("disconnect", help="end a session", description="End a session and close its connections.", epilog=SESSION_EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
+    disconnect.add_argument("--session", metavar="ID", help="the session from ardia connect (default: $ARDIA_SESSION)")
+    disconnect.add_argument("--data-dir", metavar="DIR", help=data_help)
+
+    rename = commands.add_parser("rename", help="rename the session's agent profile", description="Rename the agent profile a session is connected to (agent profiles only).", epilog=SESSION_EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
+    rename.add_argument("name", metavar="NAME", help="the new name")
+    rename.add_argument("--session", metavar="ID", help="the session from ardia connect (default: $ARDIA_SESSION)")
+    rename.add_argument("--data-dir", metavar="DIR", help=data_help)
 
     skills = commands.add_parser("skills", help="install the ardia agent skill")
     skill_commands = skills.add_subparsers(dest="skills_command", metavar="<command>")
@@ -116,6 +171,8 @@ def main(argv: list[str] | None = None) -> int:
     args.program = program
     if args.command == "exec":
         return run_exec(args, parser)
+    if args.command in ("profiles", "connect", "disconnect", "rename"):
+        return run_session_command(args)
     if args.command == "skills":
         if args.skills_command != "install":
             parser.parse_args(["skills", "--help"])
@@ -153,6 +210,23 @@ def read_source(args) -> tuple[str, str]:
     return args.code, "<exec>"
 
 
+def run_session_command(args) -> int:
+    from ardia_cli import redact as redaction
+    from ardia_cli import sessions
+
+    raw = sys.stdout
+    out = sys.stdout = redaction.RedactingStream(sys.stdout)
+    err = sys.stderr = redaction.RedactingStream(sys.stderr)
+    redaction.install_log_redaction()
+    try:
+        if args.command == "connect":
+            return sessions.connect(args, raw)
+        return getattr(sessions, args.command)(args)
+    finally:
+        out.drain()
+        err.drain()
+
+
 def run_exec(args, parser) -> int:
     from ardia_cli import redact as redaction
 
@@ -169,7 +243,7 @@ def run_exec(args, parser) -> int:
 def _run_exec(args) -> int:
     import asyncio
 
-    from ardia_cli.endpoint import EndpointError, data_root, explicit_data_root, resolve
+    from ardia_cli.endpoint import SESSION_EXIT, EndpointError, SessionError, data_root, explicit_data_root, resolve
 
     try:
         source, filename = read_source(args)
@@ -185,9 +259,12 @@ def _run_exec(args) -> int:
         runner.print_err(runner.format_syntax_error(error))
         return 1
     try:
-        endpoint = resolve(ws=args.ws, port=args.port, data_dir=args.data_dir)
+        endpoint = resolve(ws=args.ws, port=args.port, data_dir=args.data_dir, session=args.session)
         root = explicit_data_root(args.data_dir) if endpoint.explicit else data_root(args.data_dir)
         value = asyncio.run(runner.run_code(source, filename, endpoint, args.timeout or None, root))
+    except SessionError as error:
+        runner.print_err(f"ardia: {error}")
+        return SESSION_EXIT
     except EndpointError as error:
         runner.print_err(f"ardia: {error}")
         return 2
