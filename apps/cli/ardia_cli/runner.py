@@ -9,7 +9,7 @@ import sys
 import traceback
 
 from ardia_cli import guard
-from ardia_cli.endpoint import Endpoint, EndpointError, lost_error
+from ardia_cli.endpoint import Endpoint, EndpointError, SessionError, lost_error
 from ardia_cli.redact import redact
 
 PAGE_SCHEMES = ("http:", "https:", "about:", "data:", "blob:")
@@ -226,7 +226,28 @@ class Session:
             pass
 
 
-def build_namespace(session: Session, filename: str, data_root=None) -> dict:
+def run_through_gateway(endpoint: Endpoint, data_root, session_id, command, arg, window):
+    from ardia_cli import control
+    from ardia_cli.endpoint import RouteError, RouteLost, require_control, require_session, run_command
+
+    if data_root is None:
+        raise control.Unreachable("run() needs --data-dir or $ARDIA_DATA_DIR when --port, --ws or $ARDIA_CDP_URL picks the browser")
+    token = endpoint.session or require_session(session_id)
+    try:
+        return run_command(require_control(data_root), token, command, arg, window)
+    except RouteError as error:
+        raise control.MethodError(error.code, error.message) from None
+    except RouteLost as error:
+        lost = control.Unreachable(str(error))
+        lost.sent = error.sent
+        raise lost from None
+    except EndpointError as error:
+        if isinstance(error, SessionError):
+            raise
+        raise control.Unreachable(str(error)) from None
+
+
+def build_namespace(session: Session, filename: str, data_root=None, session_id: str | None = None) -> dict:
     import pydoll
     from pydoll.constants import By, Key
 
@@ -280,16 +301,7 @@ def build_namespace(session: Session, filename: str, data_root=None) -> dict:
     from ardia_cli import control
 
     async def run(command: str, arg: str | None = None, window=None):
-        params = {"command": command}
-        if arg is not None:
-            params["arg"] = arg
-        if window is not None:
-            params["window"] = window
-        connection = await control.open_control(data_root)
-        try:
-            return await connection.call("run", params)
-        finally:
-            await connection.close()
+        return await asyncio.to_thread(run_through_gateway, session.endpoint, data_root, session_id, command, arg, window)
 
     async def windows():
         connection = await control.open_control(data_root)
@@ -311,6 +323,7 @@ def build_namespace(session: Session, filename: str, data_root=None) -> dict:
     namespace["run"] = run
     namespace["windows"] = windows
     namespace["events"] = events
+    namespace["SessionError"] = SessionError
     namespace["CommandError"] = control.MethodError
     namespace["ControlUnreachable"] = control.Unreachable
     namespace["js"] = js
@@ -322,7 +335,7 @@ def build_namespace(session: Session, filename: str, data_root=None) -> dict:
     return namespace
 
 
-async def run_code(source: str, filename: str, endpoint: Endpoint, timeout: float | None, data_root=None):
+async def run_code(source: str, filename: str, endpoint: Endpoint, timeout: float | None, data_root=None, session_id: str | None = None):
     body, tail, names = compile_code(source, filename)
     loop = asyncio.get_running_loop()
     main = asyncio.current_task()
@@ -331,7 +344,7 @@ async def run_code(source: str, filename: str, endpoint: Endpoint, timeout: floa
     session = Session(endpoint)
     try:
         await session.connect()
-        namespace = build_namespace(session, filename, data_root)
+        namespace = build_namespace(session, filename, data_root, session_id)
         active = await session.active_target()
         tabs = await session.page_tabs(active)
         namespace["tabs"].extend(tabs)

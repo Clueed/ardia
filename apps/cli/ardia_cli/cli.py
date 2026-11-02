@@ -49,11 +49,13 @@ In scope:
                  profile is a profile name or its folder under Chromium/ (default: all). Only http(s) pages.
                  All three read Ardia's data dir (the token path's, or --data-dir/$ARDIA_DATA_DIR), need control on,
                  and cover the owner's profiles only, never agent profiles or incognito.
-  await run(command, arg=None, window=None)   run one of Ardia's commands (see ardia commands); CommandError if refused
+  await run(command, arg=None, window=None)   run one of Ardia's commands in the session's profile (see ardia commands);
+                                              CommandError if refused, SessionError without a live session
   await windows()                             Ardia's windows and their tabs
   async for e in events(*names)               Ardia's events as they happen (default: all)
-                 These three use <data dir>/ArdiaControl.sock; with --port, --ws or $ARDIA_CDP_URL they need
-                 --data-dir or $ARDIA_DATA_DIR.
+                 windows() and events() use <data dir>/ArdiaControl.sock, run() the gateway with the session;
+                 with --port, --ws or $ARDIA_CDP_URL they need --data-dir or $ARDIA_DATA_DIR (run() also
+                 --session or $ARDIA_SESSION).
   By, Key, asyncio and pydoll's exports (Tab, WebElement, PageEvent, NetworkEvent, ...)
 
 The value of the last expression is printed (strings as is, other values as repr, or JSON with --json).
@@ -261,7 +263,7 @@ def _run_exec(args) -> int:
     try:
         endpoint = resolve(ws=args.ws, port=args.port, data_dir=args.data_dir, session=args.session)
         root = explicit_data_root(args.data_dir) if endpoint.explicit else data_root(args.data_dir)
-        value = asyncio.run(runner.run_code(source, filename, endpoint, args.timeout or None, root))
+        value = asyncio.run(runner.run_code(source, filename, endpoint, args.timeout or None, root, args.session))
     except SessionError as error:
         runner.print_err(f"ardia: {error}")
         return SESSION_EXIT
@@ -270,7 +272,7 @@ def _run_exec(args) -> int:
         return 2
     except runner.UserCodeError as error:
         runner.print_err(runner.format_user_error(error))
-        return 1
+        return SESSION_EXIT if isinstance(error.error, SessionError) else 1
     except runner.ExecTimeout as error:
         runner.print_err(f"ardia exec: {error}")
         return 1

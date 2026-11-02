@@ -189,14 +189,14 @@ page engines) can't go in the file; tell the user where they are in Settings ins
 ## Commands and events
 
 Ardia's own commands (new tab, toggle sidebar, select tab 3, split view and the rest of its menus) run with
-`ardia run`, without CDP. `ardia commands` lists them with their variants; `ardia windows` lists the windows and
+`ardia run --session ID`, without CDP, inside your session's profile; commands that would reach past it are refused. `ardia commands` lists them with their variants; `ardia windows` lists the windows and
 their tabs, private windows never included. Prefer these to clicking through a page when the user asks Ardia to do
 something to itself.
 
 ```sh
 ardia commands
-ardia run newTab
-ardia run selectTab 3
+ardia run newTab --session <ID>
+ardia run selectTab 3 --session <ID>
 ardia windows --json
 ardia events tab.navigated
 ```
@@ -216,7 +216,8 @@ event's JSON on stdin and `ARDIA_EVENT`, `ARDIA_URL`, `ARDIA_TITLE`, `ARDIA_TAB_
 
 `run` is argv, not a shell line; use `["/bin/sh", "-c", "…"]` when you need one, and never paste event values
 into it. `ardia hooks list` checks the file, `ardia hooks install` (ask first) runs the hooks at every login, and
-their output goes to `~/Library/Logs/Ardia/hooks.log`. Inside `ardia exec` the same is `await run(...)`,
+their output goes to `~/Library/Logs/Ardia/hooks.log`. A hook that calls `ardia run` needs a session too
+(`$ARDIA_SESSION` from the runner's environment, or its own `ardia connect`). Inside `ardia exec` the same is `await run(...)`,
 `await windows()` and `async for e in events(...)`.
 
 ## Daily reports

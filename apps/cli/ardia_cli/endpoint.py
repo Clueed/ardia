@@ -39,9 +39,16 @@ class SessionError(EndpointError):
 
 
 class RouteError(Exception):
-    def __init__(self, code: str):
-        super().__init__(code)
+    def __init__(self, code: str, message: str = ""):
+        super().__init__(message or code)
         self.code = code
+        self.message = message or code
+
+
+class RouteLost(EndpointError):
+    def __init__(self, message: str, sent: bool):
+        super().__init__(message)
+        self.sent = sent
 
 
 @dataclass(frozen=True)
@@ -50,6 +57,7 @@ class Endpoint:
     source: str
     explicit: bool
     active: str | None = None
+    session: str | None = None
 
 
 @dataclass(frozen=True)
@@ -148,7 +156,7 @@ def from_control_file(path: Path, session: str | None) -> Endpoint:
     control = read_control(path)
     if session is None:
         raise SessionError(NO_SESSION)
-    return Endpoint(f"ws://127.0.0.1:{control.port}{control.browser}?{query(token=session)}", str(path), False, control.url("active", token=session))
+    return Endpoint(f"ws://127.0.0.1:{control.port}{control.browser}?{query(token=session)}", str(path), False, control.url("active", token=session), session)
 
 
 def read_control(path: Path) -> Control:
@@ -201,21 +209,28 @@ def get_json(url: str, timeout: float = ROUTE_TIMEOUT):
         with direct.open(url, timeout=timeout) as response:
             raw = response.read(_MAX_CONTROL_FILE)
     except urllib.error.HTTPError as error:
-        code = None
+        code = message = None
         try:
             body = json.loads(error.read(_MAX_CONTROL_FILE))
-            code = body.get("error") if isinstance(body, dict) else None
+            if isinstance(body, dict):
+                code, message = body.get("error"), body.get("message")
         except Exception:
             pass
         finally:
             error.close()
-        raise RouteError(code if isinstance(code, str) and code else f"http-{error.code}") from None
-    except Exception:
-        raise EndpointError(NOT_REACHABLE) from None
+        code = code if isinstance(code, str) and code else f"http-{error.code}"
+        raise RouteError(code, message if isinstance(message, str) else "") from None
+    except Exception as error:
+        raise RouteLost(NOT_REACHABLE, not _refused(error)) from None
     try:
         return json.loads(raw)
     except ValueError:
-        raise EndpointError(NOT_REACHABLE) from None
+        raise RouteLost(NOT_REACHABLE, True) from None
+
+
+def _refused(error: Exception) -> bool:
+    reason = getattr(error, "reason", error)
+    return isinstance(reason, (ConnectionRefusedError, FileNotFoundError))
 
 
 def control_call(control: Control, route: str, **params) -> dict:
@@ -237,6 +252,24 @@ def session_call(control: Control, session: str, route: str, **params):
         if error.code == "http-404":
             raise SessionError(SESSION_ENDED) from None
         raise
+
+
+RUN_TIMEOUT = 35
+
+
+def run_command(control: Control, session: str, command: str, arg=None, window=None):
+    params = {"command": command}
+    if arg is not None:
+        params["arg"] = json.dumps(arg, ensure_ascii=False, separators=(",", ":"))
+    if window is not None:
+        params["window"] = window
+    try:
+        answer = get_json(control.url("run", token=session, **params), timeout=RUN_TIMEOUT)
+    except RouteError as error:
+        if error.code == "http-404":
+            raise SessionError(SESSION_ENDED) from None
+        raise
+    return answer.get("result") if isinstance(answer, dict) else None
 
 
 def session_gone(endpoint: Endpoint) -> bool:

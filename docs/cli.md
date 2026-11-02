@@ -33,7 +33,7 @@ the pins into `pyproject.toml`).
   its sockets; prints `disconnected`.
 - `ardia rename NAME [--session ID] [--data-dir DIR]` (`/ardia/rename?token=SESSION&name=NAME`) renames the session's
   agent profile; prints `renamed to NAME`. Exit 1 for `not-agent` (a real profile), `bad-name` or `name-taken`.
-- `exec`, `scripts test`, `disconnect` and `rename` take the session from `--session ID`, else `$ARDIA_SESSION`; there's
+- `exec`, `run`, `scripts test`, `disconnect` and `rename` take the session from `--session ID`, else `$ARDIA_SESSION`; there's
   no "most recent" default. On the token path, without one they print one line (`Connect first: run ardia connect
   --new NAME … then pass --session ID or set $ARDIA_SESSION.`) and exit 6. A session Ardia doesn't know (ended by
   `disconnect`, quit, control off or 30 minutes idle, or mistyped) also exits 6 with `That session has ended …`:
@@ -53,7 +53,8 @@ the pins into `pyproject.toml`).
   `new_tab(url, background=True)` (in the session's profile), `js(expression, tab=None)` (default: `tab`, else the last
   `new_tab`), `await pinned()`, `await open_tabs(profile=None)`,
   `await history(days=1, limit=200, profile=None, domains=False)` (see Browsing data), `await run(command, arg=None,
-  window=None)`, `await windows()` and `async for e in events(*names)` (see `docs/automation.md`), `By`, `Key`,
+  window=None)` (through the gateway with the run's session), `await windows()` and `async for e in events(*names)`
+  (over the control socket, no session) (see `docs/automation.md`), `By`, `Key`,
   `asyncio`, pydoll's exports and its common exceptions. It prints the last expression's value. Exit 0 done, 1 the
   code raised or timed out (default 300 s), 2 Ardia can't be reached or closed the browser socket (it watches the
   socket, so turning the setting off ends an idle run at once), 6 no session or it ended, 130 interrupted.
@@ -65,8 +66,8 @@ the pins into `pyproject.toml`).
 - `ardia config path|init|get|set|unset|list|edit|check` reads, writes and checks `config.json` (see
   `docs/config.md`, The ardia command). Never needs Ardia running.
 - `ardia theme new|use|list|check` makes, picks and checks colour themes (see `docs/config.md`).
-- `ardia run COMMAND [ARG]` runs one of Ardia's commands over `<data dir>/ArdiaControl.sock` (see
-  `docs/automation.md`).
+- `ardia run COMMAND [ARG] [--window ID] [--session ID]` runs one of Ardia's commands in the session's profile through
+  the gateway's `/ardia/run` route (see `docs/automation.md`); exit 6 without a live session.
 - `ardia commands` lists the commands `run` takes (see `docs/automation.md`).
 - `ardia windows` lists the windows and their tabs (see `docs/automation.md`).
 - `ardia events [EVENT…]` streams browser events (see `docs/automation.md`).
@@ -248,6 +249,11 @@ else the session-ended line): `exec` connects to `ws://127.0.0.1:Q<browser>?toke
 on every `/devtools/page/<id>` URL, so page sockets carry it too. The gateway scopes those sockets to the session's
 profile: targets listed, attached, reported and closed there only, `Target.createTarget` answered by the app opening
 a tab in that profile, page sockets to other targets refused at the handshake.
+
+`GET /ardia/run?token=SESSION&command=NAME[&arg=<JSON>][&window=<id>]` runs a command scoped to the session's profile
+(`docs/automation.md`): `{"result":{"ok":true}}`, or `{"error","message"}` with the socket's codes (`bad_request`
+400, `unknown_command` 404, `refused` 403, `no_window` 409, `failed` 500, also when the app doesn't answer in 30 s);
+a 404 without a body is an unknown or ended session. The CLI waits up to 35 s for it.
 
 The routes are `GET http://127.0.0.1:Q/ardia/<route>?token=…&…` with every value percent-encoded, a JSON body, and
 errors as 4xx `{"error": "<code>"}` (400 `bad-name`, 404 `no-such-profile` or an unknown token, 409 `name-taken`,

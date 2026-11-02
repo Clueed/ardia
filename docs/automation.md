@@ -63,8 +63,10 @@ bookmark searches) and their fixed page title.
 - `hello` → `{"app": "Ardia", "version": "0.2.44", "protocol": 1}`.
 - `commands` → `[{"id", "title", "scope", "variants": [ids] | null}]`: the automatable commands. `title` is the menu
   title (else the command bar's, else the id), `scope` is `"page"`, `"window"` or `null`.
-- `run` `{"command", "arg"?, "window"?}` → `{"ok": true}` once the command was dispatched (not necessarily finished).
-  `command` is a catalog id, `arg` one of its variant ids. It runs through `runCommand`, exactly as the menu or a
+- `run` always answers `refused` ("ardia run needs a session: run ardia connect, then pass --session."). Commands run
+  through the gateway instead (below, Running commands with a session).
+- `run` through the gateway `{"command", "arg"?, "window"?}` → `{"ok": true}` once the command was dispatched (not
+  necessarily finished). `command` is a catalog id, `arg` one of its variant ids. It runs through `runCommand`, exactly as the menu or a
   shortcut would. `window` must be an eligible window id, else `no_window` (no fallback to another window); without
   it, the last focused eligible window (windows never focused come after, in window order); with no browser window
   open at all it runs with none, as the menu does (`newTab` and `newWindow` open one); otherwise `no_window`. A
@@ -87,6 +89,23 @@ native selectors. Refused (`refused`), and left out of `commands`:
 - for now, commands that need an argument other than a variant id (a profile, window, bookmark, extension, folder
   or closed-item id: `switchProfile`, `moveTabToWindow`, `openBookmark`, …). An `arg` that isn't one of the
   command's variants is `bad_request`.
+
+### Running commands with a session
+
+`ardia run` and exec's `await run(...)` need a session from `ardia connect` (`docs/cli.md`) and call the gateway's
+`GET /ardia/run?token=SESSION&command=NAME[&arg=<JSON>][&window=<id>]` on the port in `<data dir>/ArdiaGateway.json`,
+never the socket. `arg` is the JSON encoding of the variant (the CLI sends its string), left out when there is none.
+The reply is `200 {"result":{"ok":true}}`, or 4xx/5xx `{"error":"<code>","message":"…"}` with the socket's codes:
+`bad_request` 400, `unknown_command` 404, `refused` 403, `no_window` 409, `failed` 500. An unknown or ended session
+is a 404 with no JSON body. The gateway checks the token, counts the call as session activity, and hands JS only
+`{request, profile, command, arg, window}` (the app profile id, never the token) as `gateway.run`; JS answers
+`runReply` within 30 s, else `failed`.
+
+JS runs it scoped to the session's profile (`planRun` with the profile): the target window (given, or the last
+focused) must be showing that profile (an agent profile: the Agents page with one of its tabs shown), commands that
+act on tabs act only on that profile's tabs, and only an explicit allowlist of scoped commands runs. Anything that
+can't be kept to one profile (app-wide settings, quit, window management that would move other profiles' tabs,
+opening Settings, switching to another profile, private windows) and anything unknown is `refused`.
 
 This is more than the token path grants: the token path reaches web pages through an allowlist of CDP methods,
 while the socket reaches the browser's own commands (tabs, windows, sidebar, splits, groups, profiles' UI, sharing,
@@ -113,19 +132,24 @@ listens to pays nothing.
 
 ### The pill
 
-`run` shows the "ardia is controlling Ardia" pill like a CDP connection does: it counts as active from the moment
-the request arrives until its reply is written, then the usual 3 s hold. The indicator combines CDP connections and
+A gateway `run` shows the "ardia is controlling Ardia" pill like a CDP connection does: it counts as active from the
+moment the request arrives until its reply is written, then the usual 3 s hold. The indicator combines CDP connections and
 socket runs; neither overwrites the other. `hello`, `commands`, `windows` and `subscribe` don't show it, so a hooks
 runner connected all day doesn't keep it up. Stop hides it at once.
 
 ## The ardia command
 
-Every command finds the socket from `--data-dir` / `$ARDIA_DATA_DIR`, else the installed app's data dir, connects,
-checks the server's uid, and exits 2 with one line when Ardia isn't running, control is off or the check fails.
+Every command but `run` finds the socket from `--data-dir` / `$ARDIA_DATA_DIR`, else the installed app's data dir,
+connects, checks the server's uid, and exits 2 with one line when Ardia isn't running, control is off or the check
+fails. `run` finds the gateway the same way, through `<data dir>/ArdiaGateway.json` and its checks.
 
-- `ardia run COMMAND [ARG] [--window ID] [--json]` runs a command (`COMMAND:ARG` works too, as in shortcut ids).
-  Exit 1 if refused, unknown (with the closest ids) or `no_window`. A dropped connection after sending is reported,
-  never retried, with exit 2 and a line saying the command may or may not have run.
+- `ardia run COMMAND [ARG] [--window ID] [--json] [--session ID]` runs a command in the session's profile
+  (`COMMAND:ARG` works too, as in shortcut ids). The session is `--session`, else `$ARDIA_SESSION`; without one, or
+  with one that ended, exit 6 with one line (nothing is sent without one). Exit 1 if refused, unknown (with the
+  closest ids, from the socket's `commands`), `bad_request`, `no_window` or `failed`. A connection that drops or
+  times out (35 s) after the request went out is reported, never retried, with exit 2 and a line saying the command
+  may or may not have run; a refused connection is the plain exit-2 line. The session token is redacted from
+  everything it prints.
 - `ardia commands [--json]` lists command ids, titles and variants.
 - `ardia windows [--json]` prints the windows and their tabs.
 - `ardia events [EVENT…] [--json]` streams events (default all) until interrupted; `--json` prints the raw lines.
@@ -136,16 +160,21 @@ checks the server's uid, and exits 2 with one line when Ardia isn't running, con
   retries like a reconnect.
 - `ardia hooks run|install|uninstall|list` runs the hooks in `hooks.json` in the config folder (`docs/config.md`'s
   resolver, so a scratch instance uses its own).
-- In `ardia exec`: `await run(command, arg=None, window=None)`, `await windows()`, and `async for e in events(*names)`.
-  With `--port`, `--ws` or `$ARDIA_CDP_URL` they need `--data-dir` or `$ARDIA_DATA_DIR` and raise without one, so a
-  test browser never drives the installed Ardia by accident. Errors are `CommandError` (`.code`, `.message`) and
-  `ControlUnreachable`; each call opens its own connection.
+- In `ardia exec`: `await run(command, arg=None, window=None)` (through the gateway with exec's session), `await
+  windows()`, and `async for e in events(*names)` (over the socket). With `--port`, `--ws` or `$ARDIA_CDP_URL` they
+  need `--data-dir` or `$ARDIA_DATA_DIR` and raise without one, so a test browser never drives the installed Ardia by
+  accident; there `run` also needs `--session` or `$ARDIA_SESSION`. Errors are `CommandError` (`.code`, `.message`),
+  `ControlUnreachable` and `SessionError` (uncaught, it ends exec with exit 6); each call opens its own connection.
 
 ### Running a hook
 
 - The event's JSON line is the hook's stdin (authoritative). The environment gets `ARDIA_EVENT`, `ARDIA_WINDOW_ID`,
   `ARDIA_TAB_ID`, `ARDIA_PROFILE`, `ARDIA_URL`, `ARDIA_TITLE`, all set or removed for every run (never inherited from
   the runner), NULs stripped and each cut to 4 KB.
+- A hook that calls `ardia run` needs a session like any other caller: the runner passes its own environment on, so
+  `$ARDIA_SESSION` reaches the hook when `ardia on` or `ardia hooks run` was started with it, or the hook runs
+  `ardia connect` itself. The LaunchAgent's environment has no session. Sessions end after 30 idle minutes, so a
+  long-lived hooks runner should expect exit 6 and connect again. `windows`, `events` and `commands` need none.
 - PROGRAM runs from argv, never through a shell unless PROGRAM is one; event values are never put into the command
   line. A leading `~` in PROGRAM is expanded, nothing else is.
 - `--match`/`match` take userscript match patterns (`urlmatch.py`); several match if any does; an event without a URL
@@ -197,4 +226,5 @@ checks the server's uid, and exits 2 with one line when Ardia isn't running, con
 The app side: node tests for the handlers (the command classification, refusals, `no_window` without fallback, the
 eligibility rule including closes and Peek, internal-page redaction, event shapes, subscribe replacement, the
 generation check) and a hidden-instance check over the real socket. The CLI side: unit tests against a fake socket
-server speaking the protocol, and one end-to-end run against a hidden instance.
+server speaking the protocol and a fake gateway for `run` (session refusal, ended sessions, error codes, a dropped
+reply, redaction), and one end-to-end run against a hidden instance.
