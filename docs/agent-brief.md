@@ -139,8 +139,14 @@ Engine files are in `engine/ardiacore/src/ardia/core`, app files in `packages/ar
 - **Agent profiles** (`ardia connect`, `docs/cli.md`): `Profile.kind === "agent"` profiles live in `profiles` but never in
   `profileOrder`; the pager's pages are `[AGENTS_PAGE, ...profileOrder]` (`state/browser/agents.ts`). A window on the Agents
   page has `agentsPage` set and, while an agent tab shows, `profileId` is that agent profile and `ownerProfileId` the owner's,
-  which new tabs, links and new windows use (`ownerProfileOf`). Connect requests, sessions and renames reach JS as
-  `gateway.*` events (`state/app/cliConnect.ts`); fake them in a dev instance with `globalThis.acCliConnect`.
+  which new tabs, links and new windows use (`ownerProfileOf`).
+- **The CLI gateway** (`packages/ardiacore/ios/Gateway*.swift`, the `ArdiaGateway` module; JS `state/app/cliConnect.ts`,
+  `gatewayTabs.ts`): with control on, the app serves the `ardia` command on its own 127.0.0.1 port
+  (`<data dir>/ArdiaGateway.json`) and proxies each session's sockets to the engine's token server, narrowed to the
+  session's profile. A target's profile is its `browserContextId`, matched to a profile by asking one of that profile's
+  tabs for its own target info (`ArdiaGatewayTabs`, `Target.getTargetInfo` on the tab); `Target.createTarget` opens an app
+  tab (`gateway.openTab`). Connect requests, sessions and renames reach JS as `gateway.*` events; fake them in a dev
+  instance with `globalThis.acCliConnect`.
 - **CEF-era code** (removed in 6bdf66ce): `git show 6bdf66ce^:packages/cef/ios/<file>`. Comments citing
   `packages/cef/…` mean: `ACBrowserView.mm`, `ACClient.mm` → `ArdiaWebView*.mm`; `ACChromeWindow.mm`,
   `ACPopupWindow.mm` → `ArdiaWindowController.mm`, `ArdiaPopupWindow.mm`; `ACActivation`, `ACTabStrip`, `ACPictureInPicture`,

@@ -7,6 +7,7 @@ NS_ASSUME_NONNULL_BEGIN
 @interface ArdiaTabRegistry : NSObject
 + (void)setView:(nullable ArdiaWebView *)view forTab:(ArdiaCoreTab *)tab;
 + (nullable ArdiaWebView *)viewForTab:(ArdiaCoreTab *)tab;
++ (NSArray<ArdiaCoreTab *> *)hostedTabs;
 + (NSString *)offerTab:(ArdiaCoreTab *)tab;
 + (NSString *)offerTab:(ArdiaCoreTab *)tab prefix:(NSString *)prefix;
 + (nullable ArdiaCoreTab *)takeOffered:(NSString *)adoptId;

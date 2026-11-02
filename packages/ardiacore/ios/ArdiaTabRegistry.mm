@@ -26,6 +26,10 @@ constexpr int64_t kOfferSeconds = 30;
   else [Views() removeObjectForKey:tab];
 }
 
++ (NSArray<ArdiaCoreTab *> *)hostedTabs {
+  return Views().keyEnumerator.allObjects;
+}
+
 + (ArdiaWebView *)viewForTab:(ArdiaCoreTab *)tab {
   return [Views() objectForKey:tab];
 }
