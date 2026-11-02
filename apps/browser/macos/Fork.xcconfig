@@ -1,4 +1,3 @@
 #include "AdHoc.xcconfig"
 
-PRODUCT_BUNDLE_IDENTIFIER = com.clueed.ardia
 AC_UPDATE_CHANNEL = stable

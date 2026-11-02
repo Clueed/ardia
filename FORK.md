@@ -43,15 +43,17 @@ It leaves `dist/fork/Ardia Fork.app` (and a zip) signed ad hoc. It downloads ups
 takes minutes, not the hours a Chromium build does. Changing anything under `engine/` would mean building
 Chromium (`docs/engine-build.md`); keep fork changes out of it.
 
-On another Mac, unzip it into `/Applications`. The first launch needs a right-click › Open, or
-`xattr -dr com.apple.quarantine "/Applications/Ardia Fork.app"`.
+On another Mac: quit Ardia, move the official `Ardia.app` to the Trash, and unzip the fork into `/Applications`.
+The first launch needs a right-click › Open, or `xattr -dr com.apple.quarantine "/Applications/Ardia Fork.app"`,
+and asks for the "Ardia Safe Storage" keychain item: choose Always Allow.
 
 ## What makes it the fork
 
-All in `apps/browser/macos/Fork.xcconfig`:
+`apps/browser/macos/Fork.xcconfig` keeps it to three things:
 
-- **Bundle ID `com.clueed.ardia`**, so its profile, settings and caches
-  (`~/Library/Application Support/com.clueed.ardia`) stay apart from an official Ardia on the same Mac.
+- **The official bundle ID `com.ardia.browser`**, so the fork takes over the official app's place: the same profile
+  (`~/Library/Application Support/com.ardia.browser`), settings, preferences and keychain key, with nothing to copy.
+  It replaces Ardia rather than sitting beside it: never keep both installed or run both at once.
 - **No updater.** `Info.plist` takes its feed and key from `ARDIA_UPDATE_FEED_URL` and `ARDIA_UPDATE_PUBLIC_KEY`,
   which the fork leaves unset, so it never checks for updates and an official release can't replace it.
 - **Ad hoc signing** (`AdHoc.xcconfig`): no Apple team needed. Passkeys and the shared keychain groups don't work.
@@ -65,6 +67,6 @@ one. The profile lives outside the app, so nothing is lost.
 
 ## Known gaps
 
-- The `ardia` CLI (`apps/cli`) and the Raycast extension (`extras/raycast-ardia`) still target `com.ardia.browser`.
-- The engine's own branding still says `com.ardia.browser` (it's prebuilt), so Chromium's helper processes and its
-  "Ardia Safe Storage" keychain item are shared with an official install on the same Mac.
+- The fork builds upstream's `main`, which can be ahead of the latest official release, and may move the profile to
+  a newer format. Going back to an older official Ardia on that profile afterwards isn't safe; back up
+  `~/Library/Application Support/com.ardia.browser` first if you might.
