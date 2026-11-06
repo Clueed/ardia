@@ -97,6 +97,24 @@ an `execute_commands` batch (checked whole before anything is sent) or straight 
 exception or Ctrl-C) it closes only its own page and browser WebSockets. Its WebSockets always connect directly,
 ignoring `http_proxy`, `ws_proxy` and the like, so no proxy sees the token.
 
+## One API under the CLI
+
+`ardia_cli/api.py` is the only layer that talks to Ardia for the session, automation and browsing-data calls. `Ardia(root,
+session)` (or `Ardia.at(data_dir, session)`) has `profiles()`, `connect(name, new, agent, on_waiting, sleep)`,
+`disconnect()`, `rename(name)` and `run(command, arg, window, tab)` over the gateway (blocking), and `commands()`,
+`windows()`, `events(*names, full_urls, idle)`, `history(…)`, `pinned()` and `open_tabs(profile)` over the control socket
+and the data dir (async). They return plain data and raise one family of errors, each with a `kind` and a `code`:
+`Unreachable` (`unreachable`), `OutcomeUnknown` (`outcome_unknown`: the request went out and the connection dropped),
+`SessionGone` (`session`: none given, or it ended), `Refused` (`refused`, `code` is Ardia's, like `name-taken` or
+`unknown_command`), `Denied` and `Expired`. They subclass the older types, so `exec`'s `CommandError`, `ControlUnreachable`
+and `SessionError` still catch them. `connect` withdraws its request (`&cancel=1`) on any exception, Ctrl-C or a signal
+included, and remembers the session it got.
+
+The CLI commands (`profiles`, `connect`, `disconnect`, `rename`, `run`, `commands`, `windows`) call it and only format
+text and map `kind` to exit codes; `exec`'s `run`, `windows`, `events`, `history`, `pinned` and `open_tabs` are its
+methods. `events`, `on` and `hooks` keep their own socket handling (raw lines, drop counts, programs), and `browse` its
+daemon.
+
 ## The `ardia browse` command
 
 `ardia browse` gives agent-browser's command line (0.35: commands, flags, `@eN` refs, text output with `✓`/`✗`, and

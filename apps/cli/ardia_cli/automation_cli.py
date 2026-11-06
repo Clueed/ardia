@@ -171,10 +171,6 @@ async def with_connection(args, work):
         await connection.close()
 
 
-def call(args, method: str, params=None, timeout=control.CALL_TIMEOUT):
-    return asyncio.run(with_connection(args, lambda c: c.call(method, params, timeout)))
-
-
 def closest_commands(name: str, catalog) -> str:
     from ardia_cli.schema_check import did_you_mean
 
@@ -184,7 +180,8 @@ def closest_commands(name: str, catalog) -> str:
 
 def cmd_run(args) -> int:
     from ardia_cli import redact
-    from ardia_cli.endpoint import SESSION_EXIT, EndpointError, RouteError, RouteLost, SessionError, data_root, require_control, require_session, run_command
+    from ardia_cli.api import Ardia, ArdiaError, OutcomeUnknown, Refused, SessionGone
+    from ardia_cli.endpoint import SESSION_EXIT
 
     out = sys.stdout = redact.RedactingStream(sys.stdout)
     err = sys.stderr = redact.RedactingStream(sys.stderr)
@@ -192,25 +189,21 @@ def cmd_run(args) -> int:
     command, arg = args.command_id, args.arg
     if arg is None and ":" in command:
         command, arg = command.split(":", 1)
+    ardia = Ardia.at(args.data_dir, args.session)
     try:
-        session = require_session(args.session)
-        gateway = require_control(data_root(args.data_dir))
-        result = run_command(gateway, session, command, arg, args.window, args.tab)
-    except SessionError as error:
+        result = ardia.run(command, arg, args.window, args.tab)
+    except SessionGone as error:
         complain(f"ardia run: {error}")
         return SESSION_EXIT
-    except RouteLost as error:
-        if error.sent:
-            complain(f"ardia run: the connection dropped after the request went out, so {command} may or may not have run ({error})")
-        else:
-            complain(f"ardia: {error}")
+    except OutcomeUnknown as error:
+        complain(f"ardia run: the connection dropped after the request went out, so {command} may or may not have run ({error})")
         return 2
-    except EndpointError as error:
+    except Refused as error:
+        complain(f"ardia run: {error.message}{run_hint(ardia, error.code, command, arg)}")
+        return 1
+    except ArdiaError as error:
         complain(f"ardia: {error}")
         return 2
-    except RouteError as error:
-        complain(f"ardia run: {error.message}{run_hint(args, error.code, command, arg)}")
-        return 1
     finally:
         out.drain()
         err.drain()
@@ -218,12 +211,14 @@ def cmd_run(args) -> int:
     return 0
 
 
-def run_hint(args, code: str, command: str, arg) -> str:
+def run_hint(ardia, code: str, command: str, arg) -> str:
+    from ardia_cli.api import ArdiaError
+
     if code not in ("unknown_command", "bad_request"):
         return ""
     try:
-        catalog = call(args, "commands", timeout=5)
-    except (MethodError, Unreachable, OSError):
+        catalog = asyncio.run(ardia.commands(timeout=5))
+    except (ArdiaError, OSError):
         return ""
     if code == "unknown_command":
         return closest_commands(command, catalog or [])
@@ -249,19 +244,23 @@ def parse_id(text: str):
     return int(text) if text.isdigit() and len(text) < 16 else text
 
 
-def unreachable_exit(error: Unreachable) -> int:
-    complain(f"ardia: {error}")
-    return 2
+def listed(args, method: str):
+    from ardia_cli.api import Ardia, ArdiaError, Refused
+
+    try:
+        return asyncio.run(getattr(Ardia.at(args.data_dir), method)()), 0
+    except Refused as error:
+        complain(f"ardia {method}: {error.message}")
+        return None, 1
+    except ArdiaError as error:
+        complain(f"ardia: {error}")
+        return None, 2
 
 
 def cmd_commands(args) -> int:
-    try:
-        catalog = call(args, "commands")
-    except Unreachable as error:
-        return unreachable_exit(error)
-    except MethodError as error:
-        complain(f"ardia commands: {error.message}")
-        return 1
+    catalog, status = listed(args, "commands")
+    if status:
+        return status
     if args.json:
         say(json.dumps(catalog, indent=2, ensure_ascii=False))
         return 0
@@ -275,13 +274,9 @@ def cmd_commands(args) -> int:
 
 
 def cmd_windows(args) -> int:
-    try:
-        windows = call(args, "windows")
-    except Unreachable as error:
-        return unreachable_exit(error)
-    except MethodError as error:
-        complain(f"ardia windows: {error.message}")
-        return 1
+    windows, status = listed(args, "windows")
+    if status:
+        return status
     if args.json:
         say(json.dumps(windows, indent=2, ensure_ascii=False))
         return 0
@@ -349,7 +344,8 @@ def cmd_events(args) -> int:
     try:
         asyncio.run(with_connection(args, work))
     except Unreachable as error:
-        return unreachable_exit(error)
+        complain(f"ardia: {error}")
+        return 2
     except MethodError as error:
         complain(f"ardia events: {error.message}")
         return 1

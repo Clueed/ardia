@@ -18,7 +18,7 @@ from urllib.parse import parse_qs, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ardia_cli import browsing, cli, endpoint, redact, sessions
+from ardia_cli import api, browsing, cli, endpoint, redact, sessions
 
 CONTROL_TOKEN = "control-" + "c" * 40
 SESSION_TOKEN = "session-" + "s" * 40
@@ -107,7 +107,7 @@ def connect_server(answers: list[dict], start=None):
 class Connect(Base):
     def test_allowed_prints_only_the_session(self):
         fake = self.serve(connect_server([{"state": "pending"}, {"state": "pending"}, {"state": "allowed", "session": SESSION_TOKEN, "profile": "Work", "kind": "real"}]))
-        with mock.patch.object(sessions, "POLL_INTERVAL", 0.01):
+        with mock.patch.object(api, "POLL_INTERVAL", 0.01):
             status, out, err = self.run_cli("connect", "Work", "--agent", "claude-code")
         self.assertEqual(status, 0)
         self.assertEqual(out, SESSION_TOKEN + "\n")
@@ -130,11 +130,11 @@ class Connect(Base):
     def test_default_agent_name(self):
         fake = self.serve(connect_server([{"state": "allowed", "session": SESSION_TOKEN}]))
         self.assertEqual(self.run_cli("connect", "--new", "x")[0], 0)
-        self.assertEqual(fake.routes("/ardia/connect")[0]["agent"], sessions.DEFAULT_AGENT)
+        self.assertEqual(fake.routes("/ardia/connect")[0]["agent"], api.DEFAULT_AGENT)
 
     def test_denied(self):
         self.serve(connect_server([{"state": "pending"}, {"state": "denied"}]))
-        with mock.patch.object(sessions, "POLL_INTERVAL", 0.01):
+        with mock.patch.object(api, "POLL_INTERVAL", 0.01):
             status, out, err = self.run_cli("connect", "Work")
         self.assertEqual(status, sessions.DENIED_EXIT)
         self.assertEqual(out, "")
@@ -148,7 +148,7 @@ class Connect(Base):
 
     def test_no_answer_in_time_cancels(self):
         fake = self.serve(connect_server([{"state": "pending"}]))
-        with mock.patch.object(sessions, "CONNECT_WAIT", 0.1), mock.patch.object(sessions, "POLL_INTERVAL", 0.02):
+        with mock.patch.object(api, "CONNECT_WAIT", 0.1), mock.patch.object(api, "POLL_INTERVAL", 0.02):
             status, _, _ = self.run_cli("connect", "Work")
         self.assertEqual(status, sessions.EXPIRED_EXIT)
         self.assertTrue(any(p.get("cancel") == "1" for p in fake.routes("/ardia/connect")))
@@ -159,7 +159,7 @@ class Connect(Base):
         def interrupt(_seconds):
             raise KeyboardInterrupt
 
-        with mock.patch.object(sessions.time, "sleep", interrupt):
+        with mock.patch.object(api.time, "sleep", interrupt):
             status, out, err = self.run_cli("connect", "Work")
         self.assertEqual(status, 130)
         self.assertEqual(out, "")
@@ -175,7 +175,7 @@ class Connect(Base):
                 def stop(_seconds, signum=signum):
                     signal.raise_signal(signum)
 
-                with mock.patch.object(sessions.time, "sleep", stop):
+                with mock.patch.object(api.time, "sleep", stop):
                     status, out, err = self.run_cli("connect", "Work")
                 self.assertEqual(status, 128 + signum)
                 self.assertEqual(out, "")

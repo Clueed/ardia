@@ -226,27 +226,6 @@ class Session:
             pass
 
 
-def run_through_gateway(endpoint: Endpoint, data_root, session_id, command, arg, window, tab=None):
-    from ardia_cli import control
-    from ardia_cli.endpoint import RouteError, RouteLost, require_control, require_session, run_command
-
-    if data_root is None:
-        raise control.Unreachable("run() needs --data-dir or $ARDIA_DATA_DIR when --port, --ws or $ARDIA_CDP_URL picks the browser")
-    token = endpoint.session or require_session(session_id)
-    try:
-        return run_command(require_control(data_root), token, command, arg, window, tab)
-    except RouteError as error:
-        raise control.MethodError(error.code, error.message) from None
-    except RouteLost as error:
-        lost = control.Unreachable(str(error))
-        lost.sent = error.sent
-        raise lost from None
-    except EndpointError as error:
-        if isinstance(error, SessionError):
-            raise
-        raise control.Unreachable(str(error)) from None
-
-
 def build_namespace(session: Session, filename: str, data_root=None, session_id: str | None = None) -> dict:
     import pydoll
     from pydoll.constants import By, Key
@@ -287,49 +266,23 @@ def build_namespace(session: Session, filename: str, data_root=None, session_id:
             raise RuntimeError(f"JavaScript error: {message}")
         return result["result"].get("value")
 
-    from ardia_cli import browsing
+    from ardia_cli import api, browsing
 
-    async def pinned():
-        return await browsing.run_bounded(browsing.pinned, data_root)
-
-    async def open_tabs(profile: str | None = None):
-        return await browsing.run_bounded(browsing.open_tabs, data_root, profile=profile)
-
-    async def history(days: float = 1, limit: int | None = 200, profile: str | None = None, domains: bool = False):
-        return await browsing.run_bounded(browsing.history, data_root, days=days, limit=limit, profile=profile, domains=domains)
-
-    from ardia_cli import control
+    ardia = api.Ardia(data_root, session.endpoint.session or session_id)
 
     async def run(command: str, arg: str | None = None, window=None, tab=None):
-        return await asyncio.to_thread(run_through_gateway, session.endpoint, data_root, session_id, command, arg, window, tab)
-
-    async def windows():
-        connection = await control.open_control(data_root)
-        try:
-            return await connection.call("windows")
-        finally:
-            await connection.close()
-
-    async def events(*names: str, full_urls: bool = False):
-        wanted = control.check_events(names) or ["*"]
-        connection = await control.open_control(data_root)
-        try:
-            await connection.subscribe(wanted, {"fullUrls": True} if full_urls else None)
-            while True:
-                yield await connection.next_event()
-        finally:
-            await connection.close()
+        return await asyncio.to_thread(ardia.run, command, arg, window, tab)
 
     namespace["run"] = run
-    namespace["windows"] = windows
-    namespace["events"] = events
+    namespace["windows"] = ardia.windows
+    namespace["events"] = ardia.events
     namespace["SessionError"] = SessionError
-    namespace["CommandError"] = control.MethodError
-    namespace["ControlUnreachable"] = control.Unreachable
+    namespace["CommandError"] = api.Refused
+    namespace["ControlUnreachable"] = api.Unreachable
     namespace["js"] = js
-    namespace["pinned"] = pinned
-    namespace["open_tabs"] = open_tabs
-    namespace["history"] = history
+    namespace["pinned"] = ardia.pinned
+    namespace["open_tabs"] = ardia.open_tabs
+    namespace["history"] = ardia.history
     namespace["BrowsingDataError"] = browsing.BrowsingDataError
     namespace["NoPageTab"] = NoPageTab
     return namespace
