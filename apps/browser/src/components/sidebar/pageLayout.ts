@@ -1,5 +1,6 @@
 import { layout } from "../ui/theme";
 import type { Section } from "../../state/sidebar/geometry";
+import { CLEAR_DIVIDER_HEIGHT, listTopGap } from "./geometry";
 
 export const GLOW_ROOM = 24;
 export const ROW_PITCH = layout.rowHeight + layout.rowGap;
@@ -32,3 +33,5 @@ export function pageLayout(i: PageLayoutInput): PageLayout {
     docked: i.listHeight > i.dockAbove,
   };
 }
+
+export const listTopInset = (addressBar: boolean): number => GLOW_ROOM + listTopGap(addressBar) + CLEAR_DIVIDER_HEIGHT;

@@ -5,6 +5,37 @@ description: Drive the user's running Ardia browser from the terminal with `ardi
 
 # Driving Ardia with `ardia exec`
 
+## Connect first
+
+Every agent connects before it drives pages, and works inside one profile.
+
+```sh
+ardia profiles
+ardia connect --new research --agent claude-code
+ardia exec --session <ID> 'await tab.title()'
+ardia disconnect --session <ID>
+```
+
+`ardia profiles` lists each profile's name, kind (`real`: the user's, `agent`: made by an agent) and live sessions.
+
+- `ardia connect --new NAME` makes an agent profile of your own (empty, no logins) and connects without a prompt.
+  Use it for anything that doesn't need the user's accounts.
+- `ardia connect NAME` connects to an existing profile, the user's own included, once the user clicks Allow in
+  Ardia. It waits up to 120 s: tell the user you're asking. Exit 4: they denied it; don't ask again unprompted.
+  Exit 5: no answer.
+- `connect` prints only the session id. Pass it on every later call as `--session ID` (`$ARDIA_SESSION` works too,
+  if your shell keeps variables between commands). There's no default session. Treat it like a password: keep it
+  to yourself, out of logs, commits and files the user didn't ask for.
+- `ardia rename NAME --session ID` renames your agent profile; `ardia disconnect --session ID` ends the session.
+  Disconnect when you're done. A session also ends when Ardia quits or after 30 idle minutes; then any command exits
+  6, and you connect again.
+- `--agent NAME` (or `$ARDIA_AGENT`) is the name the user sees in the prompt; use your own (`claude-code`, `codex`).
+
+The examples below leave `--session ID` out; add it to every `ardia exec`, `ardia run` and `ardia scripts test`, and
+`--ardia-session ID` to every `ardia browse` (its own `--session` is agent-browser's namespace).
+
+## Running code
+
 `ardia exec` runs Python against the Ardia the user has open, with top-level `await`. The value of the last
 expression is printed: strings as they are, anything else as its repr, or JSON with `--json`. Every run is a new
 process, so carry state between runs in a URL or a file, not a variable.
@@ -17,10 +48,11 @@ ardia exec -f script.py
 
 In scope:
 
-- `tab`: the web page the user is looking at when the run starts, even with Ardia's window covered. When they're on
+- `tab`: the session profile's web page the user is looking at when the run starts, even with Ardia's window
+  covered (in an agent profile, the newest page you opened that's still open). When they're on
   New Tab or another Ardia view, any use of `tab` raises `NoPageTab` (and `bool(tab)` is False): open a page with
   `new_tab` instead.
-- `tabs`: every web page tab when the run starts, the user's own included, plus the ones `new_tab` opens.
+- `tabs`: every web page tab of the session's profile when the run starts, plus the ones `new_tab` opens.
 - `new_tab(url, background=True)`: opens a tab in the sidebar, waits for the page to load and returns it.
   `background=False` switches the user to it.
 - `js(expression, tab=None)`: evaluates JavaScript and returns its value. Pass `tab=t` for your own tab; without
@@ -28,7 +60,7 @@ In scope:
 - `browser` (pydoll `Chrome`), `By`, `Key`, `asyncio` and the rest of `pydoll`'s exports.
 
 Exit status: 0 done, 1 your code raised or timed out (`--timeout`, default 300 s), 2 Ardia can't be reached or
-stopped the connection.
+stopped the connection, 6 no session or it ended (connect again).
 On exit 2, tell the user to open Ardia and turn on Settings › "Let the ardia command control Ardia".
 
 ## agent-browser commands: `ardia browse`
@@ -36,7 +68,8 @@ On exit 2, tell the user to open Ardia and turn on Settings › "Let the ardia c
 `ardia browse <args>` takes agent-browser's commands, flags and output against this Ardia (`open`, `snapshot -i`,
 `click @e3`, `fill`, `screenshot`, ...). Use it when you know agent-browser or want ref-based steps without writing
 Python. It differs in ways that matter (background tabs get no input until `--show`, refs go stale on navigation,
-some commands are gated by Ardia's policy): read `references/browse.md` first.
+some commands are gated by Ardia's policy, and it needs your ardia session as `--ardia-session ID` or
+`$ARDIA_SESSION`): read `references/browse.md` first.
 
 ## Etiquette
 
@@ -133,7 +166,7 @@ so existing `.user.js` files work too. `ardia scripts --help` and each command's
 
 - Start from `ardia scripts new`, or from a script the user already has.
 - Read the real page before writing selectors, and keep the script small and robust to the site changing.
-- Iterate with `ardia scripts test` until it passes cleanly on the pages it targets. It runs in a tab of its own and
+- Iterate with `ardia scripts test FILE --session ID` until it passes cleanly on the pages it targets. It runs in a tab of its own and
   reports what ran, what logged and what threw.
 - Install only once the user is happy with it. `ardia scripts list` and `uninstall` manage what's installed.
 
@@ -165,14 +198,14 @@ page engines) can't go in the file; tell the user where they are in Settings ins
 ## Commands and events
 
 Ardia's own commands (new tab, toggle sidebar, select tab 3, split view and the rest of its menus) run with
-`ardia run`, without CDP. `ardia commands` lists them with their variants; `ardia windows` lists the windows and
+`ardia run --session ID`, without CDP, inside your session's profile; commands that would reach past it are refused. `ardia commands` lists them with their variants; `ardia windows` lists the windows and
 their tabs, private windows never included. Prefer these to clicking through a page when the user asks Ardia to do
 something to itself.
 
 ```sh
 ardia commands
-ardia run newTab
-ardia run selectTab 3
+ardia run newTab --session <ID>
+ardia run selectTab 3 --session <ID>
 ardia windows --json
 ardia events tab.navigated
 ```
@@ -189,7 +222,7 @@ without their query and fragment unless the hook says `"fullUrls": true` (`--ful
 {
   "hooks": [
     { "name": "yt-to-media", "on": ["tab.navigated"], "match": ["https://*.youtube.com/*"], "run": ["~/bin/yt-hook"], "timeout": 30, "fullUrls": true },
-    { "name": "park", "on": "tab.idle", "idle": "2h", "command": "togglePin" },
+    { "name": "close-idle", "on": "tab.idle", "idle": "2h", "command": "closeTab" },
     { "name": "standup", "at": "09:55", "days": ["mon", "tue", "wed", "thu", "fri"], "run": ["~/bin/standup"] },
     { "name": "old-reddit", "on": "tab.opening", "rewrite": [{ "match": "https://www.reddit.com/*", "to": "https://old.reddit.com{path}{query}" }] },
     { "name": "no-camera", "on": "permission.requested", "kinds": ["camera"], "permission": "deny" }
@@ -198,7 +231,8 @@ without their query and fragment unless the hook says `"fullUrls": true` (`--ful
 ```
 
 - A hook has one trigger (`on`, `at` + optional `days`/`timezone`, `every`, or `omnibox`) and one action: `run`
-  (argv), `command` (+ `arg`, an Ardia command id run in the event's window and tab, no process), or a decide answer.
+  (argv), `command` (+ `arg`, an Ardia command id run in the event's window and tab, no process; it goes through the
+  runner's `$ARDIA_SESSION`, so only commands a session allows run, in its profile), or a decide answer.
 - Decide hooks answer before Ardia acts: `tab.opening` (`rewrite`, `cancel`), `link.opening` from other apps
   (`route`, `drop`, `from`), `download.deciding` (`folder` under `~/Downloads`), `permission.requested`
   (`permission`: deny or ask). As rules Ardia applies them itself, even with control off; with `run`, the program's
@@ -211,8 +245,9 @@ without their query and fragment unless the hook says `"fullUrls": true` (`--ful
 
 `run` is argv, not a shell line; use `["/bin/sh", "-c", "…"]` when you need one, and never paste event values
 into it. `ardia hooks list` checks the file, `ardia hooks install` (ask first) runs the hooks at every login, and
-their output goes to `~/Library/Logs/Ardia/hooks.log`. Inside `ardia exec` the same is `await run(...)` (with
-`window=` or `tab=`), `await windows()` and `async for e in events(...)`.
+their output goes to `~/Library/Logs/Ardia/hooks.log`. A hook that calls `ardia run` needs a session too
+(`$ARDIA_SESSION` from the runner's environment, or its own `ardia connect`). Inside `ardia exec` the same is
+`await run(...)` (with `window=` or `tab=`), `await windows()` and `async for e in events(...)`.
 
 ## Daily reports
 
@@ -221,8 +256,9 @@ yes, ask what they care about most and when they want it, then set it up so it r
 harness's scheduler if it has one, otherwise the system's). Save what you agreed on where the scheduled run can read
 it.
 
-Each report starts from what the user actually uses. `await pinned()` returns their pinned tabs and favorites, and
-`await history()` returns what they visited recently. Visit the sites that matter in tabs of your own, using their
+Each report starts from what the user actually uses. `await pinned()` returns their pinned tabs and favorites,
+`await open_tabs()` their open tabs, and `await history()` what they visited recently, across the user's own
+profiles (never agent profiles), whatever profile your session is in. Visit the sites that matter in tabs of your own, using their
 logins, and only read: never reply, mark as read, accept or send anything. By default the report covers what's
 pending for them and what changed on things they finished or are waiting on since the last report. Shape it around
 their priorities, keep it short, and deliver it the way they asked. Keep enough state between runs to tell new from

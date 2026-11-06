@@ -103,7 +103,11 @@ class Browser:
             await asyncio.wait_for(self.link._ensure_active_connection(), CONNECT_TIMEOUT)
         except Exception as error:
             from ardia_cli.browse.daemon import unreachable_message
+            from ardia_cli.browse.errors import SessionEnded
+            from ardia_cli.endpoint import session_gone
 
+            if await asyncio.to_thread(session_gone, self.endpoint):
+                raise SessionEnded() from None
             raise Unreachable(unreachable_message(self.endpoint, error)) from None
         for name in EVENTS:
             await self.link.register_callback(name, self._event)

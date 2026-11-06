@@ -14,7 +14,9 @@ import {
 import type { InstalledExtension } from "../../../state/extensions/store";
 import { useEffect, useState } from "react";
 import { Image, View } from "react-native";
-import { currentEngineProfile, resolvedWindowId } from "../../../state/browser/current";
+import { resolvedWindowId } from "../../../state/browser/current";
+import { AGENTS_PAGE } from "../../../state/browser/agents";
+import { useAgentLead, useExtensionsEngineProfile } from "../../../state/extensions/hooks";
 import { newTab } from "../../../state/tabs/actions";
 import { InstallDialogHost } from "../../extensions/ExtensionOverlays";
 import { Box, Button, PopUp, proseLineHeight, space, Text, TextField, Toggle } from "../../ui";
@@ -23,6 +25,8 @@ import { extensionList } from "../../../state/settings/paneData";
 import { useResource } from "../../../state/settings/resources";
 import { closeSettingsSheet, showSettingsSheet } from "../../../state/settings/sheet";
 import { replaceSettingsPlace, SETTINGS_WINDOW_ID } from "../../../state/settings/settingsWindows";
+
+const AGENTS_CHOICE = [{ value: AGENTS_PAGE, title: "Agents" }];
 
 type SiteAccess = "allSites" | "specificSites" | "onClick";
 const SITE_ACCESS: { value: SiteAccess; title: string }[] = [
@@ -35,7 +39,10 @@ const siteAccessOf = (ext: InstalledExtension): SiteAccess =>
 
 export function ExtensionsPane({ profileId: chosen, detail }: { profileId: string | null; detail: string | null }) {
   const [profileId] = useState(() => extensionsProfileId(chosen));
-  const profile = currentEngineProfile(profileId);
+  const agents = profileId === AGENTS_PAGE;
+  const agentLeadId = useAgentLead();
+  const engine = useExtensionsEngineProfile(profileId, agentLeadId);
+  const profile = engine ?? "";
   const list = useExtensionList(profile);
   const [link, setLink] = useState("");
   const [loaded] = useResource(extensionList, profile);
@@ -60,9 +67,14 @@ export function ExtensionsPane({ profileId: chosen, detail }: { profileId: strin
     <View>
       <SectionHeader
         anchor="extensions.installed"
-        action={<ProfilePicker value={profileId} onChange={(id) => replaceSettingsPlace(id)} />}
+        description={agents ? "Every agent profile shares these extensions, including ones agents create later." : undefined}
+        action={<ProfilePicker value={profileId} extra={AGENTS_CHOICE} onChange={(id) => replaceSettingsPlace(id)} />}
       />
-      {list.length ? (
+      {engine === null ? (
+        <Group>
+          <Row title="No agent profiles yet" description="Agents you let use Ardia show up here. Extensions you add then apply to all of them." />
+        </Group>
+      ) : list.length ? (
         <Group>
           {list.map((ext) => (
             <Row
@@ -87,30 +99,34 @@ export function ExtensionsPane({ profileId: chosen, detail }: { profileId: strin
         </Group>
       )}
 
-      <SectionHeader title="Add extensions" />
-      <Group>
-        <Row anchor="extensions.webStore">
-          <Button
-            title="Open Web Store"
-            onPress={() => {
-              const windowId = resolvedWindowId();
-              if (windowId) newTab(windowId, { url: "https://chromewebstore.google.com/category/extensions" });
-            }}
-          />
-        </Row>
-        <Row anchor="extensions.addLink">
-          <Box row center gap="s">
-            <TextField value={link} onChangeText={setLink} placeholder="chromewebstore.google.com/detail/…" onSubmit={addLink} width={210} />
-            <Button title="Add" disabled={!link.trim()} onPress={addLink} />
-          </Box>
-        </Row>
-        <Row anchor="extensions.unpacked">
-          <Button
-            title="Choose Folder…"
-            onPress={() => void loadUnpacked(SETTINGS_WINDOW_ID, profile).then((chosen) => chosen && showInstall())}
-          />
-        </Row>
-      </Group>
+      {engine === null ? null : (
+        <>
+          <SectionHeader title="Add extensions" />
+          <Group>
+            <Row anchor="extensions.webStore">
+              <Button
+                title="Open Web Store"
+                onPress={() => {
+                  const windowId = resolvedWindowId();
+                  if (windowId) newTab(windowId, { url: "https://chromewebstore.google.com/category/extensions", ...(agentLeadId && agents ? { profileId: agentLeadId } : {}) });
+                }}
+              />
+            </Row>
+            <Row anchor="extensions.addLink">
+              <Box row center gap="s">
+                <TextField value={link} onChangeText={setLink} placeholder="chromewebstore.google.com/detail/…" onSubmit={addLink} width={210} />
+                <Button title="Add" disabled={!link.trim()} onPress={addLink} />
+              </Box>
+            </Row>
+            <Row anchor="extensions.unpacked">
+              <Button
+                title="Choose Folder…"
+                onPress={() => void loadUnpacked(SETTINGS_WINDOW_ID, profile).then((chosen) => chosen && showInstall())}
+              />
+            </Row>
+          </Group>
+        </>
+      )}
     </View>
   );
 }

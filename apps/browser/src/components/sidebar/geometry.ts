@@ -3,6 +3,7 @@ import { layout } from "../ui/theme";
 import { radius } from "../ui/tokens";
 
 export const LIVE_FOLDER_PAD = 2;
+export const CLEAR_DIVIDER_HEIGHT = 16;
 export const GROUP_INDENT = SIDEBAR_GROUP.indent;
 export const GROUP_BORDER = SIDEBAR_GROUP.border;
 export const GROUP_RADIUS = SIDEBAR_GROUP.radius;

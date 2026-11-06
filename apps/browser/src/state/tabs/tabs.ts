@@ -17,6 +17,7 @@ import { orderSections } from "../groups/groups";
 import { samePage } from "../../lib/url";
 import { historyOf } from "../history/history";
 import { pinHome } from "../pins/pinHomes";
+import { isAgentProfile, ownerProfileOf, withoutAgentsPage } from "../browser/agents";
 
 export type NewTabOptions = {
   url?: string;
@@ -68,6 +69,10 @@ export function closingTabs(s: BrowserState, ids: string[], { lastClosesWindow =
     const view = viewTabIds(next, w.id);
     const shown = view.filter((id) => gone.includes(id));
     if (!shown.length || !view.every((id) => gone.includes(id) || isAsleep(next.tabs[id]))) continue;
+    if (isAgentProfile(next, w.profileId)) {
+      next = ownerUnderAgents(next, w.id, gone);
+      continue;
+    }
     const keepsWindow = !lastClosesWindow || leavesEmptyWindow(shown.length > 1 ? removeTabs(next, shown.slice(1), false) : next, shown[0]!);
     if (keepsWindow) next = withNewTab(next, w.id)[0];
     else closedWindows.push(w.id);
@@ -92,7 +97,7 @@ export function activated(s: BrowserState, id: string, shareLivePins = true): Pa
   const share = holder ? { page: frozenOn(tab, holder.id), url: holder.url, title: holder.title, favicon: holder.favicon, muted: holder.muted } : {};
   const nextTab: Tab = { ...tab, lastActiveAt: Date.now(), ...(frozen ? share : lazy ? { page: wokenPage(tab) } : {}) };
   const window: BrowserWindow = {
-    ...w,
+    ...agentsPageFor(s, w, tab.profileId),
     profileId: w.kind === "private" ? w.profileId : tab.profileId,
     activeTabIds: { ...w.activeTabIds, [tab.profileId]: id },
   };
@@ -102,6 +107,23 @@ export function activated(s: BrowserState, id: string, shareLivePins = true): Pa
     windows: { ...s.windows, [w.id]: window },
     ...(ui?.panel.open ? { windowUi: { ...s.windowUi, [w.id]: { ...ui, panel: { open: false, initialText: "" } } } } : {}),
   };
+}
+
+function ownerUnderAgents(s: BrowserState, windowId: string, gone: string[]): BrowserState {
+  const w = s.windows[windowId]!;
+  const owner = ownerProfileOf(s, w);
+  const open = (id: string | undefined) => !!id && s.tabs[id]?.windowId === windowId && !gone.includes(id);
+  let target = open(w.activeTabIds[owner]) ? w.activeTabIds[owner] : w.tabIds.find((id) => s.tabs[id]?.profileId === owner && open(id));
+  if (!target) [s, target] = withNewTab(s, windowId, { profileId: owner, background: true });
+  s = apply(s, activated(s, target));
+  return { ...s, windows: { ...s.windows, [windowId]: { ...s.windows[windowId]!, agentsPage: true, ownerProfileId: owner } } };
+}
+
+function agentsPageFor(s: BrowserState, w: BrowserWindow, profileId: string): BrowserWindow {
+  if (w.kind === "private") return w;
+  if (!isAgentProfile(s, profileId)) return withoutAgentsPage(w);
+  const owner = isAgentProfile(s, w.profileId) ? w.ownerProfileId : w.profileId;
+  return { ...w, agentsPage: true, ...(owner ? { ownerProfileId: owner } : {}) };
 }
 
 export const apply = (s: BrowserState, patch: Partial<BrowserState>): BrowserState => ({ ...s, ...patch });
@@ -254,7 +276,7 @@ export function withNewTab(s: BrowserState, windowId: string, o: NewTabOptions =
   if (o.openerId && !o.background) s = forgetOpeners(s, windowId);
   const w = s.windows[windowId];
   if (!w) return [s, ""];
-  const profileId = w.kind === "private" ? w.profileId : o.profileId && s.profiles[o.profileId] ? o.profileId : w.profileId;
+  const profileId = w.kind === "private" ? w.profileId : o.profileId && s.profiles[o.profileId] ? o.profileId : ownerProfileOf(s, w);
   const url = o.url ? resolveTyped(s.settings, o.url) : "";
   const tab = makeTab(windowId, profileId, url, { ...o.snapshot, pin: o.pinned === false ? null : (o.snapshot?.pin ?? (o.pinned ? TILE_PIN : null)) });
   if (tab.page.kind === "loaded" && !o.snapshot) tab.page = loadedPage(navigationTo(url, !o.replaced));

@@ -10,7 +10,7 @@ from ardia_cli.browse import paths
 from ardia_cli.browse.errors import BrowseError, Usage
 
 VALUE_FLAGS = {
-    "--session", "--namespace", "--data-dir", "--port", "--ws", "--cdp", "--max-output", "--screenshot-dir", "--screenshot-format",
+    "--session", "--ardia-session", "--namespace", "--data-dir", "--port", "--ws", "--cdp", "--max-output", "--screenshot-dir", "--screenshot-format",
     "--screenshot-quality", "--idle-timeout", "--init-script", "--enable", "--headers", "--color-scheme", "--download-path",
 }
 BOOL_FLAGS = {
@@ -133,6 +133,23 @@ def endpoint_choice(found: dict, env: dict) -> tuple[str | None, int | None, str
         except ValueError:
             raise Usage(f"--port takes a number, not {port}") from None
     return ws, port, found.get("data_dir")
+
+
+def ardia_session_given(found: dict) -> str | None:
+    value = found.get("ardia_session")
+    value = value if value is not None else os.environ.get("ARDIA_SESSION")
+    return (value or "").strip() or None
+
+
+def ardia_session_for(found: dict, token_path: bool) -> str | None:
+    from ardia_cli import endpoint as endpoints
+
+    if not token_path:
+        return None
+    try:
+        return endpoints.session_id(found.get("ardia_session"))
+    except endpoints.SessionError:
+        return None
 
 
 def write(text: str, stream) -> None:
@@ -331,7 +348,9 @@ def run(argv: list[str]) -> int:
         ws, port, data_dir = endpoint_choice(found, env)
         register_secrets(ws, env)
         root = endpoints.data_root(data_dir)
-        endpoint_key, endpoint_label = client.endpoint_key(ws, port, root)
+        token_path = ws is None and port is None and not env.get("ARDIA_CDP_URL")
+        ardia_session = ardia_session_for(found, token_path)
+        endpoint_key, endpoint_label = client.endpoint_key(ws, port, root, ardia_session)
         key = paths.session_key(namespace, endpoint_key, session)
         options["_session"] = session
         command = rest[0]
@@ -350,10 +369,15 @@ def run(argv: list[str]) -> int:
             stdin = sys.stdin.read()
         if command == "close" and "--all" in args:
             return close_all(root, as_json, options)
+        if token_path:
+            endpoints.require_control(root)
+        if token_path and ardia_session is None:
+            missing = endpoints.NO_SESSION.replace("pass --session ID", "pass --ardia-session ID")
+            raise endpoints.SessionError(missing if ardia_session_given(found) is None else endpoints.SESSION_ENDED)
         idle = found.get("idle_timeout") or env.get("AGENT_BROWSER_IDLE_TIMEOUT_MS")
         config = {
             "session": session, "namespace": namespace, "key": key, "data_root": str(root), "ws": ws, "port": port, "data_dir": data_dir,
-            "endpoint_label": endpoint_label, "idle_timeout_ms": parse_duration(idle) if idle else None, "debug": bool(found.get("debug")),
+            "endpoint_label": endpoint_label, "ardia_session": ardia_session, "idle_timeout_ms": parse_duration(idle) if idle else None, "debug": bool(found.get("debug")),
             "no_auto_dialog": options["no_auto_dialog"], "pin_tab": options.get("pin_tab"),
         }
         dir_fd = dir_fd_factory()
@@ -365,6 +389,10 @@ def run(argv: list[str]) -> int:
         answer = client.request(sock, {"argv": rest, "options": options, "cwd": os.getcwd(), "env": env_subset, "stdin": stdin})
     except BrowseError as error:
         return print_error(error, as_json)
+    except endpoints.SessionError as error:
+        from ardia_cli.browse.errors import SessionEnded
+
+        return print_error(SessionEnded(str(error)), as_json)
     except endpoints.EndpointError as error:
         from ardia_cli.browse.errors import Unreachable
 

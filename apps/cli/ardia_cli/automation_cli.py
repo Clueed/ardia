@@ -11,16 +11,19 @@ from ardia_cli.control import MethodError, Unreachable
 
 DATA_DIR_HELP = "the Ardia data dir (default: $ARDIA_DATA_DIR, else the installed app's)"
 RUN_DESCRIPTION = """\
-Run one of Ardia's commands, exactly as its menu item or shortcut would, in the last focused window or --window.
-ARG is one of the command's variants (ardia commands lists them); COMMAND:ARG works too.
+Run one of Ardia's commands, exactly as its menu item or shortcut would, in the last focused window or --window,
+scoped to the session's profile. --tab picks the tab for commands that act on a page, without changing focus. ARG
+is one of the command's variants (ardia commands lists them); COMMAND:ARG works too. It needs a session from
+ardia connect (--session ID or $ARDIA_SESSION); commands that can't be kept to that profile are refused.
 
 Exit status: 0 dispatched, 1 refused, unknown or no such window, 2 Ardia can't be reached (or the connection
-dropped after the request went out, so the command may or may not have run).
+dropped after the request went out, so the command may or may not have run), 6 no session or it has ended.
 
 Examples:
-  ardia run newTab
-  ardia run selectTab 3
-  ardia run toggleSidebar --window 2
+  ardia run newTab --session ID
+  ardia run selectTab 3 --session ID
+  ardia run toggleSidebar --window 2 --session ID
+  ardia run reload --tab 14 --session ID
 """
 EVENTS_DESCRIPTION = f"""\
 Print Ardia's events as they happen, until interrupted. EVENT is one of:
@@ -64,7 +67,8 @@ $ARDIA_DATA_DIR) in one process:
   }
 
 A hook has one trigger (on, at, every or omnibox) and one action (run, command, or a decide answer). Event hooks
-run like ardia on (see ardia on --help); command hooks run an Ardia command in the event's window and tab; decide
+run like ardia on (see ardia on --help); command hooks run an Ardia command in the event's window and tab through
+the gateway with $ARDIA_SESSION (a session from ardia connect; without one they log why and don't run); decide
 hooks (tab.opening, link.opening, download.deciding, permission.requested) answer before Ardia acts, as rules
 Ardia applies itself or as a program whose stdout is the answer; scheduled hooks get a schedule.fired event.
 Rules that route or rewrite links, pick folders, run decide programs or read the address bar wait for approval in
@@ -90,6 +94,7 @@ def add_parsers(commands, formatter):
     run.add_argument("--window", metavar="ID", help="a window id from ardia windows (default: the last focused window)")
     run.add_argument("--tab", metavar="ID", help="a tab id from ardia windows, for commands that act on a page; never changes focus")
     run.add_argument("--json", action="store_true", help="print the reply as JSON")
+    run.add_argument("--session", metavar="ID", help="the session from ardia connect (default: $ARDIA_SESSION)")
 
     listing = data_dir(commands.add_parser("commands", help="list the commands ardia run can run", description="List the commands ardia run can run: ids, titles and variants."))
     listing.add_argument("--json", action="store_true", help="print JSON")
@@ -166,10 +171,6 @@ async def with_connection(args, work):
         await connection.close()
 
 
-def call(args, method: str, params=None, timeout=control.CALL_TIMEOUT):
-    return asyncio.run(with_connection(args, lambda c: c.call(method, params, timeout)))
-
-
 def closest_commands(name: str, catalog) -> str:
     from ardia_cli.schema_check import did_you_mean
 
@@ -178,52 +179,56 @@ def closest_commands(name: str, catalog) -> str:
 
 
 def cmd_run(args) -> int:
+    from ardia_cli import redact
+    from ardia_cli.api import Ardia, ArdiaError, OutcomeUnknown, Refused, SessionGone
+    from ardia_cli.endpoint import SESSION_EXIT
+
+    out = sys.stdout = redact.RedactingStream(sys.stdout)
+    err = sys.stderr = redact.RedactingStream(sys.stderr)
+    redact.install_log_redaction()
     command, arg = args.command_id, args.arg
     if arg is None and ":" in command:
         command, arg = command.split(":", 1)
-    params = {"command": command}
-    if arg is not None:
-        params["arg"] = arg
-    if args.window is not None:
-        params["window"] = parse_id(args.window)
-    if args.tab is not None:
-        params["tab"] = parse_id(args.tab)
-
-    async def work(connection):
-        try:
-            return await connection.call("run", params), None
-        except MethodError as error:
-            catalog = None
-            if error.code in ("unknown_command", "bad_request"):
-                try:
-                    catalog = await connection.call("commands")
-                except (MethodError, Unreachable):
-                    catalog = None
-            return error, catalog
-
+    ardia = Ardia.at(args.data_dir, args.session)
     try:
-        result, catalog = asyncio.run(with_connection(args, work))
-    except Unreachable as error:
-        if error.sent:
-            complain(f"ardia run: the connection dropped after the request went out, so {command} may or may not have run ({error})")
-        else:
-            complain(f"ardia: {error}")
+        result = ardia.run(command, arg, args.window, args.tab)
+    except SessionGone as error:
+        complain(f"ardia run: {error}")
+        return SESSION_EXIT
+    except OutcomeUnknown as error:
+        complain(f"ardia run: the connection dropped after the request went out, so {command} may or may not have run ({error})")
         return 2
-    if isinstance(result, MethodError):
-        hint = ""
-        if catalog is not None and result.code == "unknown_command":
-            hint = closest_commands(command, catalog)
-        elif catalog is not None and arg is not None:
-            spec = next((c for c in catalog if isinstance(c, dict) and c.get("id") == command), None)
-            variants = spec.get("variants") if spec else None
-            if variants:
-                from ardia_cli.schema_check import did_you_mean
-
-                hint = did_you_mean(arg, variants)
-        complain(f"ardia run: {result.message}{hint}")
+    except Refused as error:
+        complain(f"ardia run: {error.message}{run_hint(ardia, error.code, command, arg)}")
         return 1
+    except ArdiaError as error:
+        complain(f"ardia: {error}")
+        return 2
+    finally:
+        out.drain()
+        err.drain()
     say(json.dumps(result, ensure_ascii=False) if args.json else f"ran {command}{':' + arg if arg else ''}")
     return 0
+
+
+def run_hint(ardia, code: str, command: str, arg) -> str:
+    from ardia_cli.api import ArdiaError
+
+    if code not in ("unknown_command", "bad_request"):
+        return ""
+    try:
+        catalog = asyncio.run(ardia.commands(timeout=5))
+    except (ArdiaError, OSError):
+        return ""
+    if code == "unknown_command":
+        return closest_commands(command, catalog or [])
+    spec = next((c for c in catalog or [] if isinstance(c, dict) and c.get("id") == command), None)
+    variants = spec.get("variants") if spec else None
+    if arg is None or not variants:
+        return ""
+    from ardia_cli.schema_check import did_you_mean
+
+    return did_you_mean(arg, variants)
 
 
 def idle_seconds(text: str | None) -> int | None:
@@ -239,19 +244,23 @@ def parse_id(text: str):
     return int(text) if text.isdigit() and len(text) < 16 else text
 
 
-def unreachable_exit(error: Unreachable) -> int:
-    complain(f"ardia: {error}")
-    return 2
+def listed(args, method: str):
+    from ardia_cli.api import Ardia, ArdiaError, Refused
+
+    try:
+        return asyncio.run(getattr(Ardia.at(args.data_dir), method)()), 0
+    except Refused as error:
+        complain(f"ardia {method}: {error.message}")
+        return None, 1
+    except ArdiaError as error:
+        complain(f"ardia: {error}")
+        return None, 2
 
 
 def cmd_commands(args) -> int:
-    try:
-        catalog = call(args, "commands")
-    except Unreachable as error:
-        return unreachable_exit(error)
-    except MethodError as error:
-        complain(f"ardia commands: {error.message}")
-        return 1
+    catalog, status = listed(args, "commands")
+    if status:
+        return status
     if args.json:
         say(json.dumps(catalog, indent=2, ensure_ascii=False))
         return 0
@@ -265,13 +274,9 @@ def cmd_commands(args) -> int:
 
 
 def cmd_windows(args) -> int:
-    try:
-        windows = call(args, "windows")
-    except Unreachable as error:
-        return unreachable_exit(error)
-    except MethodError as error:
-        complain(f"ardia windows: {error.message}")
-        return 1
+    windows, status = listed(args, "windows")
+    if status:
+        return status
     if args.json:
         say(json.dumps(windows, indent=2, ensure_ascii=False))
         return 0
@@ -339,7 +344,8 @@ def cmd_events(args) -> int:
     try:
         asyncio.run(with_connection(args, work))
     except Unreachable as error:
-        return unreachable_exit(error)
+        complain(f"ardia: {error}")
+        return 2
     except MethodError as error:
         complain(f"ardia events: {error.message}")
         return 1

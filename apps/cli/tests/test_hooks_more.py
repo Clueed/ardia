@@ -174,6 +174,7 @@ class Live(Base):
 
     def test_command_hook_runs_in_the_event_window_and_is_rate_limited(self):
         server = self.serve()
+        gateway = self.gateway()
         log, _, main = self.service([{"name": "loop", "on": "tab.opened", "command": "newTab"}])
 
         def feed():
@@ -184,10 +185,11 @@ class Live(Base):
         import threading
 
         threading.Thread(target=feed, daemon=True).start()
-        runs = lambda: [p for m, p in server.requests if m == "run"]
+        runs = lambda: list(gateway.runs)
         asyncio.run(main(lambda: len(runs()) >= 10 and any("triggering itself" in l for l in log), 5))
         self.assertEqual(len(runs()), 10)
         self.assertEqual(runs()[0], {"command": "newTab", "window": "w1"})
+        self.assertNotIn("run", [m for m, _ in server.requests])
 
     def test_decide_program_answers_and_a_slow_one_is_stopped(self):
         server = self.serve()

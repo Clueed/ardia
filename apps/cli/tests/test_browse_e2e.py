@@ -319,23 +319,66 @@ class BrowseTokenPath(unittest.TestCase):
         subprocess.run(["node", "-e", SESSION_JS, str(cls.data)], cwd=REPO, check=True, timeout=30)
         cls.http_port = free_port()
         cls.server = subprocess.Popen([sys.executable, "-I", "-c", SERVE, str(cls.http_port)], cwd=FIXTURES, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        log = str(cls.data / "app.out.log")
-        subprocess.run(["open", "-g", "-n", "--env", "ARDIA_BACKGROUND=1", "--env", f"ARDIA_DATA_DIR={cls.data}", "--stdout", log, "--stderr", log, APP],
-                       check=True, timeout=30)
-        control = cls.data / "Chromium" / "ArdiaControl.json"
         cls.pid = None
+        cls.ardia_session = None
+        log = str(cls.data / "app.out.log")
+        metro = os.environ.get("METRO_PORT", "8081")
+        subprocess.run(["open", "-g", "-n", "--env", "ARDIA_BACKGROUND=1", "--env", f"ARDIA_DATA_DIR={cls.data}",
+                        "--env", f"ARDIA_INSTANCE=jsLocation=localhost:{metro}", "--stdout", log, "--stderr", log, APP], check=True, timeout=30)
+        gateway = cls.data / "ArdiaGateway.json"
         try:
-            wait_for(control.exists, 60, "ArdiaControl.json")
-            cls.pid = json.loads(control.read_text())["pid"]
+            wait_for(gateway.exists, 180, "ArdiaGateway.json (is Metro running?)")
+            cls.pid = json.loads(gateway.read_text())["pid"]
+            cls.ardia_session = cls.connect("Personal")
             wait_for(lambda: BrowseEndToEnd.fetch_ok(f"http://127.0.0.1:{cls.http_port}/login.html"), 10, "the fixture server")
         except BaseException:
             cls.tearDownClass()
             raise
 
     @classmethod
+    def connect(cls, profile):
+        env = dict(os.environ, PYTHONPATH=str(CLI))
+        env.pop("ARDIA_SESSION", None)
+        connecting = subprocess.Popen([sys.executable, "-m", "ardia_cli", "connect", profile, "--agent", "e2e", "--data-dir", str(cls.data)],
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+        allow = ("const c = globalThis.acCliConnect; const r = c && c.store.getState().requests[0];"
+                 " if (!r) return null; c.answerConnect(r.id, true); return r.id;")
+
+        def allowed():
+            return cls.harness(allow) is not None
+
+        try:
+            wait_for(allowed, 60, "the connect prompt")
+            out, err = connecting.communicate(timeout=30)
+        finally:
+            if connecting.poll() is None:
+                connecting.kill()
+        if connecting.returncode:
+            raise RuntimeError(f"ardia connect exited {connecting.returncode}: {err}")
+        return out.strip()
+
+    @classmethod
+    def harness(cls, body, seconds=10):
+        ident = f"e2e-{time.monotonic_ns()}"
+        result = cls.data / "dev-eval-result.json"
+        (cls.data / "dev-eval.js").write_text(f"// {ident}\n{body}")
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            try:
+                out = json.loads(result.read_text())
+            except (OSError, ValueError):
+                out = {}
+            if out.get("id") == ident:
+                if out.get("error"):
+                    raise RuntimeError(out["error"])
+                return out.get("result")
+            time.sleep(0.2)
+        raise AssertionError("the dev harness didn't answer")
+
+    @classmethod
     def tearDownClass(cls):
         try:
-            if cls.pid:
+            if cls.ardia_session:
                 cls.browse("close", "--all", check=False)
         finally:
             if cls.pid:
@@ -357,10 +400,13 @@ class BrowseTokenPath(unittest.TestCase):
         return True
 
     @classmethod
-    def browse(cls, *args, session="token", check=True, timeout=120):
+    def browse(cls, *args, session="token", check=True, timeout=120, ardia_session=None):
         env = dict(os.environ, PYTHONPATH=str(CLI))
         env.pop("AGENT_BROWSER_NO_HUMANIZE", None)
-        done = subprocess.run([sys.executable, "-m", "ardia_cli", "browse", "--data-dir", str(cls.data), "--session", session, *args],
+        env.pop("ARDIA_SESSION", None)
+        chosen = cls.ardia_session if ardia_session is None else ardia_session
+        given = ["--ardia-session", chosen] if chosen else []
+        done = subprocess.run([sys.executable, "-m", "ardia_cli", "browse", "--data-dir", str(cls.data), "--session", session, *given, *args],
                               capture_output=True, text=True, timeout=timeout, env=env)
         if check and done.returncode:
             raise AssertionError(f"ardia browse {' '.join(args)} exited {done.returncode}: {done.stderr}{done.stdout}")
@@ -408,6 +454,18 @@ class BrowseTokenPath(unittest.TestCase):
         time.sleep(1)
         self.assertTrue(self.alive(self.pid))
         self.assertIn("service worker", self.browse("get", "title", session=session).stdout)
+
+    def test_needs_a_live_ardia_session(self):
+        self.assertEqual(self.browse("tab", session="token-none", ardia_session="", check=False).returncode, 6)
+        done = self.browse("tab", session="token-ended", ardia_session="session-" + "x" * 40, check=False)
+        self.assertEqual(done.returncode, 6)
+        self.assertIn("has ended", done.stderr)
+
+    def test_tab_active_follows_the_session(self):
+        session = "token-active"
+        self.browse("open", self.url("login.html"), "--show", session=session)
+        done = self.browse("tab", "active", session=session)
+        self.assertIn("login.html", done.stdout)
 
     def test_gated_commands_name_the_refused_method(self):
         session = "token-gated"

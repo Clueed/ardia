@@ -15,6 +15,15 @@ class Unreachable(BrowseError):
     exit_code = 2
 
 
+class SessionEnded(BrowseError):
+    exit_code = 6
+
+    def __init__(self, message: str | None = None):
+        from ardia_cli.endpoint import SESSION_ENDED
+
+        super().__init__(message or SESSION_ENDED, code="session_ended")
+
+
 class ConnectionLost(BrowseError):
     exit_code = 2
 

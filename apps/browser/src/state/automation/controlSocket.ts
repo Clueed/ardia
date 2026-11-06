@@ -3,7 +3,6 @@ import {
   broadcastOnControlSocket,
   onControlClose,
   onControlRequest,
-  onControlWritten,
   replyOnControlSocket,
   startControlSocket,
   stopControlSocket,
@@ -12,13 +11,12 @@ import {
 } from "../../platform/automation";
 import { systemInfo } from "../../platform/app";
 import { useBrowser } from "../browser/store";
-import { NoCommandWindowError, runCommand } from "../commands/commands";
-import { noteSocketRun, noteSocketServing } from "../app/cliControl";
+import { noteSocketServing } from "../app/cliControl";
 import { errorText } from "../../lib/errors";
 import { minimizedUrl } from "../../lib/urlParts";
 import { automationWindows } from "./automationWindows";
 import { TAB_IDLE_EVENTS, USER_IDLE_EVENTS, type AutomationEventName } from "./eventNames";
-import { commands, failure, hello, parseRequest, parseSubscription, planRun, type RequestId, type Subscription } from "./automationMethods";
+import { commands, failure, hello, parseRequest, parseSubscription, SOCKET_RUN_REFUSED, type RequestId, type Subscription } from "./automationMethods";
 import { feedNeeds, stopFeed, updateFeed } from "./automationFeed";
 import { answerDecision, dropResponder, serveHooks, stopResponders } from "./decideSocket";
 import { launchToReplay, recordLaunch, runLaunchActions } from "./lifecycleEvents";
@@ -32,17 +30,11 @@ let chain: Promise<void> = Promise.resolve();
 let listening = false;
 const subscriptions = new Map<number, Subscription>();
 const launchSent = new Set<number>();
-const unwrittenRuns = new Set<number>();
-let nextTicket = 0;
 
 const controlOn = () => useBrowser.getState().settings.cliControl;
 
-function send(connection: number, id: RequestId, body: Body, ticket = 0) {
-  replyOnControlSocket(connection, JSON.stringify({ id, ...body }), ticket);
-}
-
-function runWritten(tickets: readonly number[]) {
-  for (const ticket of tickets) if (unwrittenRuns.delete(ticket)) noteSocketRun(-1);
+function send(connection: number, id: RequestId, body: Body) {
+  replyOnControlSocket(connection, JSON.stringify({ id, ...body }), 0);
 }
 
 const minimized = (data: Record<string, unknown>) => (typeof data.url === "string" ? { ...data, url: minimizedUrl(data.url) } : data);
@@ -93,23 +85,13 @@ export function handleControlRequest({ connection, generation: tagged, line }: C
   if ("error" in request) return send(connection, request.id, { error: request.error });
   const { id, method, params } = request;
   if (tagged !== generation || !controlOn()) return send(connection, id, failure("failed", "Control is off."));
-  const ticket = method === "run" ? ++nextTicket : 0;
-  if (ticket) {
-    unwrittenRuns.add(ticket);
-    noteSocketRun(1);
-  }
   let body: Body;
   try {
     body = answer(connection, method, params);
   } catch (error) {
     body = failure("failed", errorText(error));
   }
-  try {
-    send(connection, id, body, ticket);
-  } catch (error) {
-    runWritten([ticket]);
-    throw error;
-  }
+  send(connection, id, body);
 }
 
 function subscribe(connection: number, params: Record<string, unknown>): Body {
@@ -138,17 +120,8 @@ function answer(connection: number, method: string, params: Record<string, unkno
       const answered = answerDecision(connection, params);
       return "error" in answered ? failure("bad_request", answered.error) : { result: answered };
     }
-    case "run": {
-      const plan = planRun(useBrowser.getState(), params);
-      if ("error" in plan) return plan;
-      try {
-        runCommand({ command: plan.command, arg: plan.arg, windowId: plan.windowId }, { strictWindow: plan.windowId !== null, tabId: plan.tabId });
-      } catch (error) {
-        if (error instanceof NoCommandWindowError) return failure("no_window", error.message);
-        throw error;
-      }
-      return { result: { ok: true } };
-    }
+    case "run":
+      return failure("refused", SOCKET_RUN_REFUSED);
   }
   return failure("unknown_method", `There's no method ${method}.`);
 }
@@ -170,7 +143,6 @@ function listen() {
     }
   });
   onControlClose(handleClose);
-  onControlWritten(({ tickets }) => runWritten(tickets));
 }
 
 async function start() {
@@ -201,7 +173,6 @@ function sync() {
     generation = null;
     noteSocketServing(false);
     stopResponders();
-    runWritten([...unwrittenRuns]);
   }
   chain = chain
     .then(() => (on ? start() : stop()))

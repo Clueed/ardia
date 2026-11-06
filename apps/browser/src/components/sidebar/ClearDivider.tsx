@@ -8,8 +8,8 @@ import { closeAllTabs } from "../../state/sidebar/clearTabs";
 import { tidyPins } from "../../state/sidebar/tidyPinsUi";
 import { openSidebarMenu } from "../../state/sidebar/menus";
 import { PINNED_FOLD_TITLES, togglePinnedFold } from "../../state/sidebar/pinnedFold";
+import { CLEAR_DIVIDER_HEIGHT } from "./geometry";
 
-const CLEAR_DIVIDER_HEIGHT = 16;
 const PADDING = TAB_ROW.contentLeft;
 const ACTIONS_DIVIDER = { marginLeft: space.m } as const;
 const SPACED_TOP = 7;

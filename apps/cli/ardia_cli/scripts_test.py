@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ardia_cli.cdp import Cdp, CdpError, ConnectionLost
-from ardia_cli.endpoint import NOT_REACHABLE, Endpoint, EndpointError
+from ardia_cli.endpoint import Endpoint, EndpointError, lost_error
 from ardia_cli.redact import redact
 from ardia_cli import urlmatch
 from ardia_cli.userscript import SOURCE_URL_PREFIX, Build, SourceMap, rules
@@ -278,7 +278,7 @@ async def run_test(build: Build, url: str, endpoint: Endpoint, expect: str | Non
     except Exception as error:
         if endpoint.explicit:
             raise EndpointError(redact(f"can't connect to {endpoint.source} ({error or type(error).__name__})")) from None
-        raise EndpointError(NOT_REACHABLE) from None
+        raise await asyncio.to_thread(lost_error, endpoint) from None
     cdp.listeners.append(run.on_event)
     target = None
     script_id = None
@@ -312,7 +312,9 @@ async def run_test(build: Build, url: str, endpoint: Endpoint, expect: str | Non
             if screenshot:
                 report.screenshot = await capture(cdp, session, screenshot, report)
         except ConnectionLost:
-            raise EndpointError(NOT_REACHABLE if not endpoint.explicit else redact(f"lost the connection to {endpoint.source}")) from None
+            if endpoint.explicit:
+                raise EndpointError(redact(f"lost the connection to {endpoint.source}")) from None
+            raise await asyncio.to_thread(lost_error, endpoint) from None
         except CdpError as error:
             report.error = redact(str(error))
         return report

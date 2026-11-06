@@ -1,7 +1,9 @@
 import { useRef } from "react";
 import { Pressable, View } from "react-native";
 import { profileNameColor, useTheme } from "../ui/theme";
-import { useIsIncognito, useProfiles, useWindowId, useWindowProfile } from "../../state/browser/hooks";
+import { useIsIncognito, useProfiles, useWindowId } from "../../state/browser/hooks";
+import { useWindowPageProfile } from "../../state/profiles/hooks";
+import { AGENTS_PAGE } from "../../state/browser/agents";
 import { setMeasuredWidth, useMeasuredWidth } from "../../state/windows/measuredWidths";
 import { ContextMenuArea, radius, Symbol, Text, useHover } from "../ui";
 import { openProfileItemMenu } from "./profileMenu";
@@ -17,7 +19,8 @@ function useIndicator(room: number) {
   const theme = useTheme();
   const incognito = useIsIncognito();
   const profiles = useProfiles();
-  const profile = useWindowProfile();
+  const profile = useWindowPageProfile(useWindowId());
+  const agents = profile.id === AGENTS_PAGE;
   const title = incognito ? "Incognito" : profile.name;
   const textWidth = useMeasuredWidth(`profile-name|${title}`);
   const shown = (incognito || profiles.length >= 2) && room >= ICON_WIDTH;
@@ -25,7 +28,7 @@ function useIndicator(room: number) {
   const showName = !!textWidth && (textWidth <= nameRoom || nameRoom >= MIN_CUT_NAME);
   const width = !shown ? 0 : showName ? Math.min(room, textWidth + 2 * PAD) : ICON_WIDTH;
   const color = incognito ? theme.textPrimary : profileNameColor(profile, theme.dark);
-  return { incognito, title, textWidth, shown, showName, width, color, profileId: profile.id };
+  return { incognito, agents, title, textWidth, shown, showName, width, color, profileId: profile.id };
 }
 
 export const useProfileIndicatorWidth = (room: number) => useIndicator(room).width;
@@ -34,7 +37,7 @@ export function ProfileIndicator({ room }: { room: number }) {
   const theme = useTheme();
   const windowId = useWindowId();
   const { hovered, hoverProps } = useHover();
-  const { incognito, title, textWidth, shown, showName, width, color, profileId } = useIndicator(room);
+  const { incognito, agents, title, textWidth, shown, showName, width, color, profileId } = useIndicator(room);
   const indicator = useRef<View>(null);
   if (!shown) return null;
 
@@ -50,7 +53,7 @@ export function ProfileIndicator({ room }: { room: number }) {
           {title}
         </Text>
       </View>
-      <ContextMenuArea onContextMenu={() => !incognito && void openProfileItemMenu(profileId, "sidebar", windowId, indicator.current)}>
+      <ContextMenuArea onContextMenu={() => !incognito && !agents && void openProfileItemMenu(profileId, "sidebar", windowId, indicator.current)}>
         <Pressable onPress={() => !incognito && void openProfileMenu(windowId)} disabled={incognito}>
           {({ pressed }) => (
             <View

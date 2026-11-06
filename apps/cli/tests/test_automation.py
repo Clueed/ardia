@@ -18,9 +18,11 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ardia_cli import automation_cli, cli, control, endpoint, hooks, runner
+from ardia_cli import automation_cli, cli, control, endpoint, hooks, redact, runner
 
 SCRATCH = Path.home() / "ardia-scratch"
+SESSION = "session-" + "a" * 40
+GATEWAY_TOKEN = "gateway-" + "g" * 40
 COMMANDS = [
     {"id": "newTab", "title": "New Tab", "scope": "window", "variants": None},
     {"id": "selectTab", "title": "Select Tab", "scope": "window", "variants": ["1", "2", "3"]},
@@ -189,6 +191,59 @@ class FakeArdia:
             os.unlink(self.path)
 
 
+class FakeGateway:
+    def __init__(self, data: Path):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        from urllib.parse import parse_qs, urlsplit
+
+        self.runs = []
+        self.reply = None
+        gateway = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                parts = urlsplit(self.path)
+                params = {key: values[0] for key, values in parse_qs(parts.query).items()}
+                if parts.path != "/ardia/run" or params.get("token") != SESSION:
+                    return self.answer(404, None)
+                params.pop("token")
+                gateway.runs.append(params)
+                if gateway.reply is not None:
+                    return self.answer(*gateway.reply(params)) if callable(gateway.reply) else self.answer(*gateway.reply)
+                if params.get("command") not in {c["id"] for c in COMMANDS}:
+                    return self.answer(404, {"error": "unknown_command", "message": f"unknown command {params.get('command')}"})
+                return self.answer(200, {"result": {"ok": True}})
+
+            def answer(self, status, body):
+                if status is None:
+                    self.close_connection = True
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                    return
+                data = b"" if body is None else json.dumps(body).encode()
+                self.send_response(status)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *_args):
+                pass
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        write_gateway_file(data, self.port)
+
+    def stop(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def write_gateway_file(data: Path, port: int):
+    path = data / endpoint.CONTROL_FILE
+    path.write_text(json.dumps({"port": port, "browser": "/devtools/browser/abc", "token": GATEWAY_TOKEN, "pid": os.getpid(), "generation": 1}))
+    path.chmod(0o600)
+
+
 def wait_for(condition, timeout=5.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -220,6 +275,12 @@ class Base(unittest.TestCase):
         server = FakeArdia(self.socket).start()
         self.addCleanup(server.stop)
         return server
+
+    def gateway(self) -> FakeGateway:
+        gateway = FakeGateway(self.data)
+        self.addCleanup(gateway.stop)
+        os.environ["ARDIA_SESSION"] = SESSION
+        return gateway
 
     def run_cli(self, *argv):
         out, err = io.StringIO(), io.StringIO()
@@ -301,13 +362,17 @@ class Discovery(Base):
         with mock.patch.dict(os.environ, {"ARDIA_DATA_DIR": ""}):
             self.assertEqual(control.socket_path(), self.temp / "installed" / control.SOCKET_FILE)
 
-    def test_lost_during_hello_is_unreachable_not_maybe_ran(self):
-        server = self.serve()
-        server.replies["hello"] = lambda params: None
+    def test_run_refused_connection_is_unreachable_not_maybe_ran(self):
+        os.environ["ARDIA_SESSION"] = SESSION
+        probe = socket.socket()
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+        probe.close()
+        write_gateway_file(self.data, port)
         status, _, err = self.run_cli("run", "newTab")
         self.assertEqual(status, 2)
         self.assertNotIn("may or may not", err)
-        self.assertNotIn("run", [m for m, _ in server.requests])
+        self.assertIn(endpoint.NOT_REACHABLE, err)
 
     def test_not_ardia(self):
         server = self.serve()
@@ -320,35 +385,61 @@ class Discovery(Base):
 class Methods(Base):
     def test_run(self):
         server = self.serve()
+        gateway = self.gateway()
         status, out, _ = self.run_cli("run", "newTab")
         self.assertEqual((status, out.strip()), (0, "ran newTab"))
         self.run_cli("run", "selectTab", "2", "--window", "1")
-        self.run_cli("run", "selectTab:3")
-        runs = [p for m, p in server.requests if m == "run"]
-        self.assertEqual(runs, [{"command": "newTab"}, {"command": "selectTab", "arg": "2", "window": 1}, {"command": "selectTab", "arg": "3"}])
-        self.assertEqual(server.requests[0][0], "hello")
+        self.run_cli("run", "selectTab:3", "--json")
+        self.run_cli("run", "newTab", "--window", "1", "--tab", "7")
+        self.assertEqual(gateway.runs, [{"command": "newTab"}, {"command": "selectTab", "arg": '"2"', "window": "1"}, {"command": "selectTab", "arg": '"3"'}, {"command": "newTab", "window": "1", "tab": "7"}])
+        self.assertNotIn("run", [m for m, _ in server.requests])
+
+    def test_run_needs_a_session(self):
+        gateway = self.gateway()
+        os.environ.pop("ARDIA_SESSION")
+        status, out, err = self.run_cli("run", "newTab")
+        self.assertEqual((status, out), (endpoint.SESSION_EXIT, ""))
+        self.assertIn("ardia connect", err)
+        self.assertEqual(gateway.runs, [])
+
+    def test_run_with_an_ended_session(self):
+        self.gateway()
+        other = "session-" + "z" * 40
+        status, out, err = self.run_cli("run", "newTab", "--session", other)
+        self.assertEqual(status, endpoint.SESSION_EXIT)
+        self.assertIn("has ended", err)
+        self.assertNotIn(other, out + err)
+
+    def test_run_never_prints_the_session(self):
+        gateway = self.gateway()
+        gateway.reply = lambda params: (403, {"error": "refused", "message": f"refused for {SESSION}"})
+        status, out, err = self.run_cli("run", "newTab")
+        self.assertEqual(status, 1)
+        self.assertNotIn(SESSION, out + err)
+        self.assertIn(redact.MASK, err)
 
     def test_run_unknown_suggests(self):
         self.serve()
+        self.gateway()
         status, _, err = self.run_cli("run", "newTabb")
         self.assertEqual(status, 1)
         self.assertIn("did you mean newTab", err)
 
     def test_run_refused_and_no_window(self):
-        server = self.serve()
-        for code in ("refused", "no_window", "failed"):
-            server.replies["run"] = lambda params, code=code: {"error": {"code": code, "message": f"{code} message"}}
+        gateway = self.gateway()
+        for code, http in (("refused", 403), ("no_window", 409), ("failed", 500), ("bad_request", 400)):
+            gateway.reply = (http, {"error": code, "message": f"{code} message"})
             status, _, err = self.run_cli("run", "newTab")
             self.assertEqual(status, 1, code)
             self.assertIn(f"{code} message", err)
 
     def test_run_dropped_after_send_is_reported_not_retried(self):
-        server = self.serve()
-        server.replies["run"] = lambda params: None
+        gateway = self.gateway()
+        gateway.reply = (None, None)
         status, _, err = self.run_cli("run", "newTab")
         self.assertEqual(status, 2)
         self.assertIn("may or may not have run", err)
-        self.assertEqual([m for m, _ in server.requests].count("run"), 1)
+        self.assertEqual(len(gateway.runs), 1)
 
     def test_commands_and_windows(self):
         self.serve()
@@ -464,20 +555,6 @@ class Methods(Base):
             await connection.close()
 
         asyncio.run(check())
-
-    def test_run_reports_maybe_ran_when_drain_fails(self):
-        self.serve()
-        original = control.Connection.call
-
-        async def failing(connection, method, params=None, timeout=control.CALL_TIMEOUT):
-            if method == "run":
-                connection._writer.drain = mock.AsyncMock(side_effect=BrokenPipeError(32, "Broken pipe"))
-            return await original(connection, method, params, timeout)
-
-        with mock.patch.object(control.Connection, "call", failing):
-            status, _, err = self.run_cli("run", "newTab")
-        self.assertEqual(status, 2)
-        self.assertIn("may or may not have run", err)
 
     def test_big_request_refused_locally(self):
         async def check():
@@ -1042,23 +1119,26 @@ class LaunchAgent(Base):
 
 
 class ExecHelpers(Base):
-    def namespace(self, root):
-        session = SimpleNamespace(browser=None, opened=[])
+    def namespace(self, root, session=None, session_id=None):
+        browser = SimpleNamespace(browser=None, opened=[], endpoint=SimpleNamespace(session=session))
         with mock.patch.dict(sys.modules, {}):
             try:
-                return runner.build_namespace(session, "<test>", root)
+                return runner.build_namespace(browser, "<test>", root, session_id)
             except ImportError as error:
                 self.skipTest(f"pydoll isn't installed: {error}")
 
     def test_helpers_over_the_socket(self):
         server = self.serve()
-        namespace = self.namespace(self.data)
+        gateway = self.gateway()
+        os.environ.pop("ARDIA_SESSION")
+        namespace = self.namespace(self.data, session=SESSION)
 
         async def check():
             self.assertEqual(await namespace["windows"](), WINDOWS)
             self.assertEqual(await namespace["run"]("selectTab", "2", window=1), {"ok": True})
-            with self.assertRaises(namespace["CommandError"]):
+            with self.assertRaises(namespace["CommandError"]) as caught:
                 await namespace["run"]("nope")
+            self.assertEqual(caught.exception.code, "unknown_command")
             stream = namespace["events"]("tab.opened")
             first = asyncio.ensure_future(stream.__anext__())
             await asyncio.get_running_loop().run_in_executor(None, server.subscribed.wait, 5)
@@ -1069,7 +1149,23 @@ class ExecHelpers(Base):
 
         got = asyncio.run(check())
         self.assertEqual(got["data"]["tabId"], 3)
-        self.assertIn(("run", {"command": "selectTab", "arg": "2", "window": 1}), server.requests)
+        self.assertIn({"command": "selectTab", "arg": '"2"', "window": "1"}, gateway.runs)
+        self.assertNotIn("run", [m for m, _ in server.requests])
+
+    def test_run_needs_a_session_on_test_servers(self):
+        gateway = self.gateway()
+        os.environ.pop("ARDIA_SESSION")
+        namespace = self.namespace(self.data)
+
+        async def check():
+            with self.assertRaises(namespace["SessionError"]):
+                await namespace["run"]("newTab")
+            os.environ["ARDIA_SESSION"] = SESSION
+            self.assertEqual(await namespace["run"]("newTab"), {"ok": True})
+            self.assertEqual(await self.namespace(self.data, session_id=SESSION)["run"]("newTab"), {"ok": True})
+
+        asyncio.run(check())
+        self.assertEqual(len(gateway.runs), 2)
 
     def test_need_data_dir_with_explicit_endpoint(self):
         namespace = self.namespace(None)

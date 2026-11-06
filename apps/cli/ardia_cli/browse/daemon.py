@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from ardia_cli.browse import paths
-from ardia_cli.browse.errors import BrowseError, ConnectionLost, Unreachable, Usage
+from ardia_cli.browse.errors import BrowseError, ConnectionLost, SessionEnded, Unreachable, Usage
 
 CONNECTED_IDLE = 30.0
 DEFAULT_DAEMON_IDLE = 3600.0
@@ -132,7 +132,9 @@ class Daemon:
 
         def resolve():
             try:
-                return endpoints.resolve(ws=config.get("ws"), port=config.get("port"), data_dir=config.get("data_dir"))
+                return endpoints.resolve(ws=config.get("ws"), port=config.get("port"), data_dir=config.get("data_dir"), session=config.get("ardia_session") or "")
+            except endpoints.SessionError as error:
+                raise SessionEnded(str(error)) from None
             except endpoints.EndpointError as error:
                 raise Unreachable(str(error)) from None
 
@@ -333,13 +335,13 @@ class Daemon:
             if self.stopping:
                 return self.refuse_closing(options, name)
             if self.state.lost:
-                return render(options, error=ConnectionLost(), name=name)
+                return render(options, error=await self.lost_error(), name=name)
             try:
                 result = await dispatch(ctx, name, argv[1:])
             except BrowseError as error:
                 if isinstance(error, ConnectionLost) or (self.state.browser is not None and not self.state.browser.alive and not self.state.browser.closed_by_us):
                     self.state.lost = True
-                    error = error if isinstance(error, ConnectionLost) else ConnectionLost()
+                    error = await self.lost_error()
                 if isinstance(error, Unreachable) and self.state.instance is None:
                     self.state.restarted = True
                 return render(options, error=error, name=name)
@@ -349,6 +351,14 @@ class Daemon:
                 log.exception("command %s crashed", name)
                 return render(options, error=BrowseError(f"{name} failed: {type(error).__name__}: {error}"), name=name)
             return render(options, result=result, name=name)
+
+    async def lost_error(self) -> BrowseError:
+        from ardia_cli import endpoint as endpoints
+
+        endpoint = self.state.endpoint
+        if endpoint is not None and await asyncio.to_thread(endpoints.session_gone, endpoint):
+            return SessionEnded()
+        return ConnectionLost()
 
     async def close(self, ctx):
         from ardia_cli.browse.commands import Result

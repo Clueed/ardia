@@ -336,6 +336,7 @@ string doesn't matter. Afterwards: `kill %1` for the server, quit the app, `rm -
 | Per‑profile Morning Brief | ✓ | ⏸ | |
 | Spaces (colour, rename) | flag-gated; changelog says Dia has no Spaces | — | Dia ships without Spaces |
 | Warn before closing last tab in a profile | ✓ | ✅ | with "Don't ask again" |
+| Agent profiles and the Agents page (Ardia only) | ✗ | ✅ | `ardia connect --new NAME` makes an agent profile (its own Chromium data, `kind: "agent"` in session.json, out of the profile order, switcher, menus, history search and suggestions); `ardia connect NAME` on an existing profile asks first: a card in the focused window ("‹agent› wants to use ‹profile›", Allow / Deny) and, when Ardia isn't frontmost, a notification with the same two actions. The Agents page is the pager's first page, always there: one folder per agent profile with a dot while an agent is connected and its tabs, which open in the background in the last focused window; clicking one shows it without leaving the page. Right-click › Delete removes the profile and its data. Settings › Extensions › Agents manages one extension set every agent profile shares (`state/app/cliConnect.ts`, `state/profiles/agents.ts`, `components/sidebar/AgentsPage.tsx`, `docs/cli.md`) |
 
 ## 6. Split view
 | Feature | Dia | Ardia | Gap |

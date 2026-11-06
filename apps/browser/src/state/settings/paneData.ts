@@ -28,6 +28,7 @@ import { currentSettings } from "../browser/current";
 import { engineProfile } from "../browser/model";
 import { currentSyncFolder, folderInfo } from "../sync/engine";
 import { extensionsProfileId, refreshExtensions } from "../extensions/actions";
+import { extensionsEngineProfile } from "../extensions/agentExtensions";
 import { cached, load, loadAll, need, resource, store, useAllLoaded, type Needed } from "./resources";
 import type { SettingsPane } from "./settingsWindows";
 
@@ -83,8 +84,10 @@ export function paneNeeds(pane: SettingsPane, profileId: string | null): Needed[
       return [need(passwordAutofill, profile)];
     case "autofill":
       return [need(addresses, profile), need(cards, profile), need(autofillEnabled, profile)];
-    case "extensions":
-      return [need(extensionList, engineProfile(useBrowser.getState(), extensionsProfileId(profileId)))];
+    case "extensions": {
+      const extensionsProfile = extensionsEngineProfile(extensionsProfileId(profileId));
+      return extensionsProfile === null ? [] : [need(extensionList, extensionsProfile)];
+    }
     case "shortcuts":
       return [need(shortcutItems)];
     case "advanced":

@@ -96,7 +96,7 @@ export function handleWebNotificationResponse({ id, action, tabId, data }: Notif
     switchToTab(tab.id);
     focus(tab.windowId);
   }
-  if (engineId) void webviews.get(tab.id)?.notificationAction(engineId, action);
+  if (engineId && (action === "click" || action === "close")) void webviews.get(tab.id)?.notificationAction(engineId, action);
   return true;
 }
 

@@ -5,6 +5,7 @@ import { bookmarkUuidFor, isBookmarkUuid, ROOT_TITLES, rootIdsFor } from "./book
 import { applyOps, bookmarkOps, flatFromEngine, flatFromStore, type Flat } from "./flatBookmarks";
 import { useBrowser, type BrowserState } from "../browser/store";
 import { engineProfile, isIncognitoProfile } from "../browser/model";
+import { isAgentProfile } from "../browser/agents";
 import type { BookmarkFolder, BookmarkNode, Bookmarks } from "../browser/types";
 import { engineProfiles } from "../profiles/engineProfiles";
 import { migrateLegacyFile } from "../app/legacyFiles";

@@ -4,6 +4,10 @@
 drives the Ardia the user is running instead of a headless browser. If you know agent-browser, type `ardia browse`
 where you'd type `agent-browser`.
 
+It needs a session from `ardia connect` (see SKILL.md): pass `--ardia-session ID` on every call, or set
+`$ARDIA_SESSION`. Its `--session` is agent-browser's session name, not this. It sees and acts only in the session's
+profile.
+
 ```sh
 ardia browse open example.com --show     # a new tab in Ardia's sidebar, shown so input reaches it
 ardia browse snapshot -i                 # interactive elements with refs
@@ -66,7 +70,8 @@ page navigates, the frame changes or focus leaves the field. Never echo secrets 
 
 0 done, 1 the command failed (including a stale ref, a gated command, or an action whose outcome is unknown),
 2 Ardia isn't reachable or closed the connection (Stop was pressed or control was turned off: the session ends, and
-an interrupted action is reported as having an unknown outcome, never retried), 130 interrupted. On 2, tell the
+an interrupted action is reported as having an unknown outcome, never retried), 6 no ardia session or it ended
+(`ardia connect` again), 130 interrupted. On 2, tell the
 user to open Ardia and turn on Settings > "Let the ardia command control Ardia".
 
 ## Reference

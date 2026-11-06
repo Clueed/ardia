@@ -1,8 +1,4 @@
-import type { BrowserCommand } from "../../platform/commands";
-import type { BrowserState } from "../browser/store";
-import { automationCommands, automationDecision, isCatalogCommand, variantsOf } from "./automationCommands";
-import { COMMANDS, LITTLE_ARDIA_PAGE_COMMANDS } from "../commands/commandCatalog";
-import { eligibleKind, isEligibleTab, lastFocusedEligibleWindow } from "./automationWindows";
+import { automationCommands } from "./automationCommands";
 import { AUTOMATION_EVENTS, MIN_IDLE_SECONDS, NAMED_ONLY_EVENTS, type AutomationEventName } from "./eventNames";
 
 export const PROTOCOL = 2;
@@ -11,7 +7,6 @@ export type ErrorCode = "bad_request" | "unknown_method" | "unknown_command" | "
 export type MethodError = { code: ErrorCode; message: string };
 export type RequestId = number | string | null;
 export type ParsedRequest = { id: RequestId; method: string; params: Record<string, unknown> };
-export type RunPlan = { command: BrowserCommand; arg: string | null; windowId: string | null; tabId: string | null };
 export type Subscription = {
   events: ReadonlySet<AutomationEventName>;
   fullUrls: boolean;
@@ -19,6 +14,8 @@ export type Subscription = {
   userIdle: ReadonlySet<number>;
   hooks: unknown;
 };
+
+export const SOCKET_RUN_REFUSED = "ardia run needs a session: run ardia connect, then pass --session.";
 
 export const failure = (code: ErrorCode, message: string) => ({ error: { code, message } satisfies MethodError });
 
@@ -43,53 +40,6 @@ export function parseRequest(line: string): ParsedRequest | { id: RequestId; err
 export const hello = (version: string) => ({ app: "Ardia", version, protocol: PROTOCOL });
 
 export const commands = automationCommands;
-
-const REFUSALS: Record<string, string> = {
-  endsApp: "ends the app",
-  changesEngine: "changes which engine shows a page",
-  leftOutSetting: "changes a setting config files can't set",
-  control: "touches control itself",
-  needsArgument: "needs an argument the socket doesn't pass",
-};
-
-type RunState = Pick<BrowserState, "windows" | "windowOrder" | "ui" | "tabs" | "peeks">;
-
-const TAB_COMMANDS: ReadonlySet<string> = new Set(["closeTab", "togglePin", "moveTabUp", "moveTabDown", "duplicateTab", "bookmarkPage"]);
-
-const scopeOf = (command: BrowserCommand) => (COMMANDS as Readonly<Record<string, { scope?: string }>>)[command]?.scope ?? null;
-
-export function planRun(s: RunState, params: Record<string, unknown>): RunPlan | { error: MethodError } {
-  const { command, arg, window, tab } = params;
-  if (typeof command !== "string" || !command) return failure("bad_request", "run needs a command id.");
-  if (!isCatalogCommand(command)) return failure("unknown_command", `There's no command ${command}.`);
-  const decision = automationDecision(command);
-  if (decision !== "run") return failure("refused", `${command} ${REFUSALS[decision]}, so the ardia command can't run it.`);
-  if (arg !== undefined && arg !== null) {
-    const variants = variantsOf(command);
-    if (typeof arg !== "string" || !variants?.includes(arg)) {
-      return failure("bad_request", variants ? `${command} takes one of: ${variants.join(", ")}.` : `${command} takes no argument.`);
-    }
-  }
-  const given = (arg as string | null | undefined) ?? null;
-  if (tab !== undefined && tab !== null) {
-    if (typeof tab !== "string" || !isEligibleTab(s, tab)) return failure("no_window", `There's no tab ${String(tab)} the ardia command can use.`);
-    if (scopeOf(command) !== "page" && !TAB_COMMANDS.has(command)) return failure("bad_request", `${command} doesn't act on a tab, so it takes no tab.`);
-    const windowId = s.tabs[tab]!.windowId;
-    if (eligibleKind(s, windowId) === "little" && command !== "closeTab" && !LITTLE_ARDIA_PAGE_COMMANDS.has(command)) {
-      return failure("bad_request", `${command} doesn't work on a Little Ardia tab.`);
-    }
-    if (window !== undefined && window !== null && window !== windowId) return failure("no_window", `Tab ${tab} isn't in window ${String(window)}.`);
-    return { command, arg: given, windowId, tabId: tab };
-  }
-  if (window !== undefined && window !== null) {
-    if (typeof window !== "string" || !eligibleKind(s, window)) return failure("no_window", `There's no window ${String(window)} the ardia command can use.`);
-    return { command, arg: given, windowId: window, tabId: null };
-  }
-  const target = lastFocusedEligibleWindow(s);
-  if (target) return { command, arg: given, windowId: target, tabId: null };
-  if (s.windowOrder.length === 0) return { command, arg: given, windowId: null, tabId: null };
-  return failure("no_window", "No window the ardia command can use is open.");
-}
 
 const KNOWN_EVENTS: ReadonlySet<string> = new Set(AUTOMATION_EVENTS);
 const MAX_THRESHOLDS = 8;

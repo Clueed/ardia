@@ -2,6 +2,7 @@ import type { BrowserState } from "../browser/store";
 import { isWindowClosing } from "./closingWindows";
 import { engineProfile, incognitoOriginal } from "../browser/model";
 import type { BrowserWindow, MainWindow } from "../browser/types";
+import { isAgentProfile } from "../browser/agents";
 
 export const SMALL_BAR_HEIGHT = 38;
 export const SMALL_LIGHTS_CENTER: [number, number] = [20, SMALL_BAR_HEIGHT / 2];
@@ -21,8 +22,8 @@ export function mainWindowFor(s: BrowserState, profileId?: string): string | und
 }
 
 export function originalProfile(s: Pick<BrowserState, "profiles">, w: BrowserWindow | undefined): string | undefined {
-  const id = w?.kind === "private" ? incognitoOriginal(w.profileId) : w?.profileId;
-  return id && s.profiles[id] ? id : undefined;
+  const id = w?.kind === "private" ? incognitoOriginal(w.profileId) : w && isAgentProfile(s, w.profileId) ? w.ownerProfileId : w?.profileId;
+  return id && s.profiles[id] && !isAgentProfile(s, id) ? id : undefined;
 }
 
 export const linkProfileOf = (s: Pick<BrowserState, "profiles">, w: BrowserWindow | undefined): string | undefined =>

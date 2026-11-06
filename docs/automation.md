@@ -76,17 +76,9 @@ bookmark searches) and their fixed page title.
   `run`'s `tab`, `answer` and decide requests; protocol 1 clients keep working.
 - `commands` → `[{"id", "title", "scope", "variants": [ids] | null}]`: the automatable commands. `title` is the menu
   title (else the command bar's, else the id), `scope` is `"page"`, `"window"` or `null`.
-- `run` `{"command", "arg"?, "window"?, "tab"?}` → `{"ok": true}` once the command was dispatched (not necessarily finished).
-  `command` is a catalog id, `arg` one of its variant ids. It runs through `runCommand`, exactly as the menu or a
-  shortcut would. `window` must be an eligible window id, else `no_window` (no fallback to another window); without
-  it, the last focused eligible window (windows never focused come after, in window order); with no browser window
-  open at all it runs with none, as the menu does (`newTab` and `newWindow` open one); otherwise `no_window`. A
-  command that asks for confirmation still asks. `tab` targets one eligible tab without activating or focusing
-  it, for commands whose scope is `"page"` and `closeTab`, `togglePin`, `moveTabUp`, `moveTabDown`, `duplicateTab`
-  and `bookmarkPage` (`bad_request` otherwise); a tab target is dispatched before Peek, Little Ardia, sidebar and
-  command-panel handling, so `closeTab` closes exactly that tab; with `window` too, the tab must be in that
-  window. Window, tab, profile and eligibility are checked just before the command runs: a closed, moved or
-  private target is `no_window`, never a fallback to the focused tab.
+- `run` always answers `refused` ("ardia run needs a session: run ardia connect, then pass --session."), whatever
+  its params. Commands run through the gateway instead (below, Running commands with a session), which takes the same
+  `command`, `arg`, `window` and `tab`.
 - `windows` → `[{"id", "kind": "normal"|"little", "focused", "profile", "profileName", "tabs": [{"id", "url",
   "title", "profile", "active", "pinned", "group": id|null}]}]`. `active` is the tab in the window's focused pane.
 - `subscribe` `{"events": [names] | ["*"], "fullUrls"?: bool, "idle"?: {"tab"?: [s], "user"?: [s]}, "hooks"?:
@@ -115,6 +107,37 @@ native selectors. Refused (`refused`), and left out of `commands`:
 - for now, commands that need an argument other than a variant id (a profile, window, bookmark, extension, folder
   or closed-item id: `switchProfile`, `moveTabToWindow`, `openBookmark`, …). An `arg` that isn't one of the
   command's variants is `bad_request`.
+
+### Running commands with a session
+
+`ardia run` and exec's `await run(...)` need a session from `ardia connect` (`docs/cli.md`) and call the gateway's
+`GET /ardia/run?token=SESSION&command=NAME[&arg=<JSON>][&window=<id>][&tab=<id>]` on the port in `<data dir>/ArdiaGateway.json`,
+never the socket. `arg` is the JSON encoding of the variant (the CLI sends its string), left out when there is none.
+The reply is `200 {"result":{"ok":true}}`, or 4xx/5xx `{"error":"<code>","message":"…"}` with the socket's codes:
+`bad_request` 400, `unknown_command` 404, `refused` 403, `no_window` 409, `failed` 500. An unknown or ended session
+is a 404 with no JSON body. The gateway checks the token, counts the call as session activity, and hands JS only
+`{request, profile, command, arg, window, tab}` (the app profile id, never the token) as `gateway.run`; JS answers
+`runReply` within 30 s, else `failed`.
+
+JS runs it scoped to the session's profile (`planSessionRun` in `state/automation/sessionRun.ts`): the target window
+(given, or the most recently focused one showing that profile) must be showing that profile (an agent profile: the
+Agents page with one of its tabs shown), else `no_window`; commands that act on tabs act only on that profile's tabs,
+and only an explicit allowlist of scoped commands runs (`SESSION_COMMANDS`: newTab, closeTab, reload, forceReload,
+stop, back, forward, nextTab, previousTab, selectTab, selectLastTab, duplicateTab, moveTabUp, moveTabDown, toggleMute,
+zoomIn, zoomOut, zoomReset, findInPage, findNext, findPrevious). `newTab` needs no shown tab: it opens a tab of that
+profile in the given or last focused window, in the background for an agent profile. Anything that can't be kept to
+one profile (app-wide settings, quit, window management that would move other profiles' tabs, opening Settings,
+switching to another profile, private windows) and anything unknown is `refused`.
+
+`{"ok": true}` means the command was dispatched (not necessarily finished); it runs through `runCommand`, exactly as
+the menu or a shortcut would, and a command that asks for confirmation still asks. `tab` targets one tab of the
+session's profile without activating or focusing it, whatever its window shows: it must be eligible (not private,
+not in Peek) and in that profile, else `no_window`. It takes the allowed commands whose scope is `"page"` and
+`closeTab`, `moveTabUp`, `moveTabDown` and `duplicateTab` (`bad_request` otherwise); in Little Ardia only its page
+commands and `closeTab`. A tab target is dispatched before Peek, Little Ardia, sidebar and command-panel handling,
+so `closeTab` closes exactly that tab; with `window` too, the tab must be in that window, else `no_window`. Window,
+tab and profile are checked just before the command runs: a closed, moved or foreign target is `no_window`, never a
+fallback to the focused tab.
 
 This is more than the token path grants: the token path reaches web pages through an allowlist of CDP methods,
 while the socket reaches the browser's own commands (tabs, windows, sidebar, splits, groups, profiles' UI, sharing,
@@ -306,19 +329,25 @@ an aborted query is cancelled (the program is killed). The program prints `[{"ti
 
 ### The pill
 
-`run` shows the "ardia is controlling Ardia" pill like a CDP connection does: it counts as active from the moment
-the request arrives until its reply is written, then the usual 3 s hold. The indicator combines CDP connections and
-socket runs; neither overwrites the other. `hello`, `commands`, `windows` and `subscribe` don't show it, so a hooks
-runner connected all day doesn't keep it up. Stop hides it at once.
+The "ardia is controlling Ardia" pill follows the gateway alone: native emits `gateway.activity` while any session
+has an open socket, a `run` or a `createTarget` in flight, and the pill shows from the first activity and stays 3 s
+after the last. The engine's own connection count doesn't count, so the gateway's upstream and monitor sockets never
+show it. No socket method shows it (`run` is refused there), so a hooks runner connected all day doesn't keep it up.
+Turning control off hides it at once.
 
 ## The ardia command
 
-Every command finds the socket from `--data-dir` / `$ARDIA_DATA_DIR`, else the installed app's data dir, connects,
-checks the server's uid, and exits 2 with one line when Ardia isn't running, control is off or the check fails.
+Every command but `run` finds the socket from `--data-dir` / `$ARDIA_DATA_DIR`, else the installed app's data dir,
+connects, checks the server's uid, and exits 2 with one line when Ardia isn't running, control is off or the check
+fails. `run` finds the gateway the same way, through `<data dir>/ArdiaGateway.json` and its checks.
 
-- `ardia run COMMAND [ARG] [--window ID] [--tab ID] [--json]` runs a command (`COMMAND:ARG` works too, as in
-  shortcut ids). Exit 1 if refused, unknown (with the closest ids) or `no_window`. A dropped connection after
-  sending is reported, never retried, with exit 2 and a line saying the command may or may not have run.
+- `ardia run COMMAND [ARG] [--window ID] [--tab ID] [--json] [--session ID]` runs a command in the session's profile
+  (`COMMAND:ARG` works too, as in shortcut ids). The session is `--session`, else `$ARDIA_SESSION`; without one, or
+  with one that ended, exit 6 with one line (nothing is sent without one). Exit 1 if refused, unknown (with the
+  closest ids, from the socket's `commands`), `bad_request`, `no_window` or `failed`. A connection that drops or
+  times out (35 s) after the request went out is reported, never retried, with exit 2 and a line saying the command
+  may or may not have run; a refused connection is the plain exit-2 line. The session token is redacted from
+  everything it prints.
 - `ardia commands [--json]` lists command ids, titles and variants.
 - `ardia windows [--json]` prints the windows and their tabs.
 - `ardia events [EVENT…] [--json] [--full-urls] [--idle DURATION]` streams events (default all but the named-only
@@ -331,11 +360,12 @@ checks the server's uid, and exits 2 with one line when Ardia isn't running, con
 - `ardia hooks run|install|uninstall|list` runs the hooks in `hooks.json` in the config folder (`docs/config.md`'s
   resolver, so a scratch instance uses its own). `list` shows each hook's kind (`event`, `command`, `decide`,
   `scheduled`, `omnibox`), trigger and action.
-- In `ardia exec`: `await run(command, arg=None, window=None, tab=None)`, `await windows()`, and
-  `async for e in events(*names, full_urls=False)`. With `--port`, `--ws` or `$ARDIA_CDP_URL` they need
-  `--data-dir` or `$ARDIA_DATA_DIR` and raise without one, so a test browser never drives the installed Ardia by
-  accident. Errors are `CommandError` (`.code`, `.message`) and `ControlUnreachable`; each call opens its own
-  connection.
+- In `ardia exec`: `await run(command, arg=None, window=None, tab=None)` (through the gateway with exec's session),
+  `await windows()`, and `async for e in events(*names, full_urls=False)` (over the socket). With `--port`, `--ws` or
+  `$ARDIA_CDP_URL` they need `--data-dir` or `$ARDIA_DATA_DIR` and raise without one, so a test browser never drives
+  the installed Ardia by accident; there `run` also needs `--session` or `$ARDIA_SESSION`. Errors are `CommandError`
+  (`.code`, `.message`), `ControlUnreachable` and `SessionError` (uncaught, it ends exec with exit 6); each call opens
+  its own connection.
 
 ### Running a hook
 
@@ -343,6 +373,10 @@ checks the server's uid, and exits 2 with one line when Ardia isn't running, con
   `ARDIA_TAB_ID`, `ARDIA_PROFILE`, `ARDIA_URL`, `ARDIA_TITLE`, all set or removed for every run (never inherited from
   the runner), NULs stripped and each cut to 4 KB. `notification.shown` sets neither `ARDIA_TITLE` nor `ARDIA_URL`.
   A hook without `fullUrls` gets URLs without their query and fragment even when another hook asked for full ones.
+- A hook that calls `ardia run` needs a session like any other caller: the runner passes its own environment on, so
+  `$ARDIA_SESSION` reaches the hook when `ardia on` or `ardia hooks run` was started with it, or the hook runs
+  `ardia connect` itself. The LaunchAgent's environment has no session. Sessions end after 30 idle minutes, so a
+  long-lived hooks runner should expect exit 6 and connect again. `windows`, `events` and `commands` need none.
 - PROGRAM runs from argv, never through a shell unless PROGRAM is one; event values are never put into the command
   line. A leading `~` in PROGRAM is expanded, nothing else is.
 - `--match`/`match` take userscript match patterns (`urlmatch.py`); several match if any does; an event without a URL
@@ -365,7 +399,7 @@ checks the server's uid, and exits 2 with one line when Ardia isn't running, con
   "hooks": [
     { "name": "yt-to-media", "on": ["tab.navigated"], "match": ["https://*.youtube.com/*"], "run": ["~/bin/yt-hook"], "timeout": 30, "fullUrls": true },
     { "name": "fresh-tab", "on": "app.launched", "command": "newTab" },
-    { "name": "park", "on": "tab.idle", "idle": "2h", "command": "togglePin" },
+    { "name": "close-idle", "on": "tab.idle", "idle": "2h", "command": "closeTab" },
     { "name": "standup", "at": "09:55", "days": ["mon", "tue", "wed", "thu", "fri"], "timezone": "Europe/Paris", "run": ["~/bin/standup"] },
     { "name": "sync", "every": "1h", "run": ["~/bin/sync"] },
     { "name": "old-reddit", "on": "tab.opening", "rewrite": [{ "match": "https://www.reddit.com/*", "to": "https://old.reddit.com{path}{query}" }] },
@@ -386,8 +420,9 @@ checks the server's uid, and exits 2 with one line when Ardia isn't running, con
   at least `1m`), or `omnibox` (`{"title", "keyword"}` or `{"title", "global": true}`, with `run`).
 - Actions: `run` (a non-empty list; a string is refused, with the `["/bin/sh", "-c", "…"]` form suggested; `timeout`
   in seconds, more than 0 and at most 86400, for event and scheduled hooks only), `command` (an Ardia command id,
-  optional `arg` a variant; no process is spawned: the runner sends `run` targeting the event's window, and its tab
-  when the command acts on a page; `app.launched` targets `focusedWindowId`; a schedule targets the last focused
+  optional `arg` a variant; no process is spawned: the runner sends `run` through the gateway with its session, so
+  only commands a session allows run and only in its profile, targeting the event's window, and its tab when the
+  command acts on a page; `app.launched` targets `focusedWindowId`; a schedule targets the last focused
   window), or a decide answer: `rewrite` (1 to 50 `{"match", "to"}`) or `cancel: true` for `tab.opening`; `route`
   (`{"profile"?, "open"?}`) or `drop: true` for `link.opening`; `folder` (`~/…`) for `download.deciding`;
   `permission` (`deny`, `ask` or `allow`) for `permission.requested`.
@@ -435,10 +470,12 @@ The runner fires them and passes a `schedule.fired` event (it never comes from A
 
 The app side: node tests for the handlers (the command classification, refusals, `no_window` without fallback, the
 eligibility rule including closes and Peek, internal-page redaction, event shapes, subscribe replacement, the
-generation check; `automationHooks.test.mjs` for launch replay, named-only events, URL minimization, tab targets,
-the new events, decide rules with control off, approvals, program decisions bound to their runner with duplicate,
-foreign and late answers refused, permissions, link routing and omnibox hooks; `hookFile.test.mjs` for the file
-checks, approval classes and rewrite safety) and a hidden-instance check over the real socket. The CLI side: unit tests against a fake socket
-server speaking the protocol (`test_hooks_more.py` covers validation, subscription options, launch dedupe across
-restarts, command hooks and their rate limit, decide programs, cancels and timeouts, and the scheduler on fake
-clocks), and one end-to-end run against a hidden instance.
+generation check, socket `run` always refused; `sessionRun.test.mjs` for the session allowlist, profile scoping and
+tab targets; `automationHooks.test.mjs` for launch replay, named-only events, URL minimization, the new events,
+decide rules with control off, approvals, program decisions bound to their runner with duplicate, foreign and late
+answers refused, permissions, link routing and omnibox hooks; `hookFile.test.mjs` for the file checks, approval
+classes and rewrite safety) and a hidden-instance check over the real socket. The CLI side: unit tests against a fake
+socket server speaking the protocol (`test_hooks_more.py` covers validation, subscription options, launch dedupe
+across restarts, command hooks and their rate limit, decide programs, cancels and timeouts, and the scheduler on fake
+clocks) and a fake gateway for `run` (session refusal, ended sessions, error codes, a dropped reply, redaction), and
+one end-to-end run against a hidden instance.

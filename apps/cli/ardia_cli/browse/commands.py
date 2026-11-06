@@ -894,14 +894,17 @@ async def user_active_tab(state):
     endpoint = state.endpoint
     if not endpoint or not endpoint.active:
         raise BrowseError("`tab active` needs the token path (Ardia's own control server), not --port or --ws")
-    import urllib.request
+    from ardia_cli import endpoint as endpoints
+    from ardia_cli.browse.errors import SessionEnded, Unreachable
 
-    def fetch():
-        direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        with direct.open(endpoint.active, timeout=3) as response:
-            return json.loads(response.read(64 * 1024))
-
-    answer = await asyncio.to_thread(fetch)
+    try:
+        answer = await asyncio.to_thread(endpoints.get_json, endpoint.active, 3)
+    except endpoints.RouteError as error:
+        if endpoints.unknown_session(error):
+            raise SessionEnded() from None
+        raise BrowseError(f"Ardia couldn't say which tab is active ({error.message})") from None
+    except endpoints.EndpointError as error:
+        raise Unreachable(str(error)) from None
     return answer.get("targetId") if isinstance(answer, dict) else None
 
 

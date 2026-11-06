@@ -1,6 +1,8 @@
 import { useShallow } from "zustand/react/shallow";
 import { useBrowser } from "../browser/store";
-import { plural, profileFor } from "../browser/model";
+import { plural, profileFor, viewTabIds } from "../browser/model";
+import { AGENTS_LOOK, AGENTS_PAGE, agentProfileIds, pageIdOf, pageLook } from "../browser/agents";
+import { useAgentFolders } from "./agents";
 import type { Profile } from "../browser/types";
 import { bookmarkRoots } from "../bookmarks/bookmarks";
 import { historyOf } from "../history/history";
@@ -38,7 +40,7 @@ export const useProfileLook = <T>(profileId: string, look: ProfileLook<T>): T =>
 
 export function useProfileLooks<T>(pages: readonly { id: string }[], look: ProfileLook<T>): T[] {
   const palette = useBasePaletteValue();
-  return useBrowser(useShallow((s) => pages.map((p) => look(s.profiles[p.id], s.ui.appDark, s.settings, palette))));
+  return useBrowser(useShallow((s) => pages.map((p) => look(pageLook(s, p.id), s.ui.appDark, s.settings, palette))));
 }
 
 export const useCreateProfileShareDefault = (windowId: string | null): string =>
@@ -56,3 +58,14 @@ export const useProfileDataStats = (profileId: string): string =>
     if (roots) [roots.bar, roots.other].forEach(walk);
     return `${plural(historyOf(s, profileId).length, "page")} in history · ${plural(bookmarks, "bookmark")}`;
   });
+
+export const useAgentProfileIds = (): string[] => useBrowser(useShallow((s) => agentProfileIds(s.profiles)));
+
+export const useAgentTabIds = (windowId: string, profileId: string): string[] => useBrowser(useShallow((s) => viewTabIds(s, windowId, profileId)));
+
+export const useAgentFolderCollapsed = (profileId: string): boolean => useAgentFolders((f) => !!f.collapsed[profileId]);
+
+export const useWindowPageId = (windowId: string): string | null => useBrowser((s) => pageIdOf(s, s.windows[windowId]));
+
+export const useWindowPageProfile = (windowId: string): Profile =>
+  useBrowser((s) => (pageIdOf(s, s.windows[windowId]) === AGENTS_PAGE ? AGENTS_LOOK : profileFor(s, s.windows[windowId]?.profileId ?? "")));

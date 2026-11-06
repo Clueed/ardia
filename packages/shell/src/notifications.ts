@@ -13,12 +13,13 @@ export type NotificationOptions = {
   windowId?: string;
   origin?: string;
   dismissible?: boolean;
+  allowDeny?: boolean;
   data?: Record<string, unknown>;
 };
 
 export type NotificationResponse = {
   id: string;
-  action: "click" | "close";
+  action: "click" | "close" | "allow" | "deny";
   tabId: string | null;
   windowId: string | null;
   data: unknown;

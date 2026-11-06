@@ -101,24 +101,6 @@ test("URLs lose their query and fragment unless the subscriber asks for full URL
   stub.emitControlClose(full);
 });
 
-test("run takes a tab without focusing it; a closed, private or wrong-window tab is an error", async () => {
-  fresh();
-  await controlOn();
-  const conn = ++nextConnection;
-  const w = S().createWindow({ url: "https://a.example/" });
-  const other = S().newTab(w, { url: "https://b.example/", background: true });
-  const active = model.activeTabId(S(), w);
-  assert.deepEqual(call("run", { command: "toggleMute", tab: other }, conn).result, { ok: true });
-  assert.equal(S().tabs[other].muted, true);
-  assert.equal(model.activeTabId(S(), w), active);
-  assert.equal(call("run", { command: "newWindow", tab: other }, conn).error.code, "bad_request");
-  assert.equal(call("run", { command: "toggleMute", tab: other, window: "nope" }, conn).error.code, "no_window");
-  const priv = S().createWindow({ kind: "private", url: "https://secret.example/" });
-  assert.equal(call("run", { command: "toggleMute", tab: model.activeTabId(S(), priv) }, conn).error.code, "no_window");
-  S().closeTab(other);
-  assert.equal(call("run", { command: "toggleMute", tab: other }, conn).error.code, "no_window");
-});
-
 test("store events: pins, moves, media, splits, crashes and page errors once per document", async () => {
   fresh();
   await controlOn();
@@ -433,28 +415,6 @@ test("decide data is trimmed per hook; invalidation sends a cancel and refuses l
   stub.emitControlClose(runner);
 });
 
-test("an explicit tab target runs before Peek and the command panel, and a missing target is an error", async () => {
-  fresh();
-  await controlOn();
-  const conn = ++nextConnection;
-  const w = S().createWindow({ url: "https://a.example/" });
-  const shown = model.activeTabId(S(), w);
-  const background = S().newTab(w, { url: "https://b.example/", background: true });
-  const peek = S().openPeek(shown, "https://peek.example/");
-  S().openPanel(w, "");
-  assert.deepEqual(call("run", { command: "closeTab", tab: background }, conn).result, { ok: true });
-  assert.equal(S().tabs[background], undefined);
-  assert.equal(S().peeks[w]?.tabId, peek);
-  assert.equal(S().windowUi[w].panel.open, true);
-  assert.equal(call("run", { command: "closeTab", tab: background }, conn).error.code, "no_window");
-  assert.equal(call("run", { command: "closeTab", tab: peek }, conn).error.code, "no_window");
-  assert.equal(call("run", { command: "newWindow", tab: shown }, conn).error.code, "bad_request");
-  const other = S().newTab(w, { url: "https://c.example/", background: true });
-  assert.deepEqual(call("run", { command: "togglePin", tab: other }, conn).result, { ok: true });
-  assert.ok(S().tabs[other].pin);
-  assert.equal(S().tabs[shown].pin, null);
-});
-
 test("a rewritten navigation goes out as not user-initiated; an unchanged one keeps its value", async () => {
   fresh([{ name: "strip", on: "tab.opening", match: "https://track.example/*", rewrite: [{ match: "https://track.example/*", to: "{origin}{path}" }] }]);
   const w = S().createWindow({ url: "https://a.example/" });
@@ -490,28 +450,4 @@ test("the incoming-link hold follows whether an active tab.opening or link.openi
   assert.equal(stub.systemSignals.holdsIncomingLinks, true);
   setHooks([{ name: "watch", on: "tab.opened", run: ["x"] }]);
   assert.equal(stub.systemSignals.holdsIncomingLinks, false);
-});
-
-test("a tab target in Little Ardia runs there, with or without a main window, and unsupported commands are refused", async () => {
-  fresh();
-  await controlOn();
-  S().updateSettings({ warnBeforeClosingLastTab: false });
-  const { isWindowClosing } = await import("../windows/closeAnimated.ts");
-  const closed = (windowId, tabId) => !S().tabs[tabId] || !S().windows[windowId] || isWindowClosing(windowId);
-  const conn = ++nextConnection;
-  const little = S().createWindow({ kind: "small", url: "https://l.example/" });
-  const tab = model.activeTabId(S(), little);
-  assert.equal(call("run", { command: "togglePin", tab }, conn).error.code, "bad_request");
-  assert.deepEqual(call("run", { command: "reload", tab }, conn).result, { ok: true });
-  assert.deepEqual(call("run", { command: "closeTab", tab }, conn).result, { ok: true });
-  await wait(20);
-  assert.ok(closed(little, tab));
-  const main = S().createWindow({ url: "https://m.example/" });
-  const little2 = S().createWindow({ kind: "small", url: "https://l2.example/" });
-  const tab2 = model.activeTabId(S(), little2);
-  S().setFocusedWindow(little2);
-  assert.deepEqual(call("run", { command: "closeTab", tab: tab2 }, conn).result, { ok: true });
-  await wait(20);
-  assert.ok(closed(little2, tab2));
-  assert.ok(S().windows[main]);
 });

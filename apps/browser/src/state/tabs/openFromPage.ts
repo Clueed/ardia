@@ -2,6 +2,7 @@ import { discardOffered, type OpenWindowRequest } from "../../platform/tabs";
 import { openWindow } from "../browser/actions";
 import { useBrowser } from "../browser/store";
 import { engineProfile } from "../browser/model";
+import { isAgentProfile } from "../browser/agents";
 import { peekSourceOf } from "../peek/peek";
 import { isSmall, originalProfile, privateWindowProfile } from "../windows/small";
 import { openLinkInSplit, openSplitPane } from "../splits/actions";
@@ -67,7 +68,7 @@ function openNow(request: OpenWindowRequest, page: PageRef, gated: boolean) {
   if (disposition === "window") {
     return void openWindow(w.kind === "private" ? { kind: "private", url, profileId: originalProfile(s, w) } : { profileId: from.profileId, url, adoptId });
   }
-  const background = disposition === "background" || from.profileId !== w.profileId;
+  const background = disposition === "background" || from.profileId !== w.profileId || isAgentProfile(s, from.profileId);
   s.newTab(w.id, { url, adoptId, openerId: from.tabId, profileId: from.profileId, background, gated });
 }
 

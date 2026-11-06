@@ -73,6 +73,7 @@ Plugins:     plugin add <npm-name[@version] | owner/repo[#ref]> [--name n] [--ca
 Sessions:    session | session info | session list | session id [--scope cwd|worktree] [--prefix p]
 
 Options:
+  --ardia-session <id>    The session from ardia connect (default $ARDIA_SESSION); needed unless --port or --ws
   --session <name>        Command-state namespace: its own tabs, refs and captures (AGENT_BROWSER_SESSION)
   --namespace <name>      Separate set of sessions (AGENT_BROWSER_NAMESPACE)
   --json                  JSON output (AGENT_BROWSER_JSON)
@@ -100,7 +101,8 @@ confirm/deny, iOS (-p ios, swipe, tap), cloud providers, and launch options (--h
 --profile, --proxy, --extension, --args, ...), since Ardia is the browser you're running.
 
 Exit status: 0 done, 1 the command failed, 2 Ardia can't be reached or closed the connection
-(the outcome of an interrupted action is reported as unknown), 130 interrupted.
+(the outcome of an interrupted action is reported as unknown), 6 no ardia session or it ended,
+130 interrupted.
 
 Examples:
   ardia browse open example.com

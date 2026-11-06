@@ -2,6 +2,7 @@ import { useContext } from "react";
 import { spaceLookSource, type LookSource } from "../../lib/profileLook";
 import { PageProfileContext, WindowContext } from "../browser/hooks";
 import { useBrowser } from "../browser/store";
+import { pageLook } from "../browser/agents";
 import type { Profile } from "../browser/types";
 import { focusedWindowOf } from "../windows/ui";
 import { useBasePaletteValue } from "../config/hooks";
@@ -14,7 +15,7 @@ export function useScopedLook<T>(resolve: (incognito: boolean, profile: Profile 
   return useBrowser((s) => {
     const w = s.windows[windowId ?? focusedWindowOf(s) ?? ""];
     if (w?.kind === "private") return resolve(true, undefined, s.ui.appDark, "own", palette);
-    return resolve(false, s.profiles[page ?? w?.profileId ?? s.settings.defaultProfileId], s.ui.appDark, windowId ? spaceLookSource(s.settings) : "utility", palette);
+    return resolve(false, pageLook(s, page ?? w?.profileId ?? s.settings.defaultProfileId), s.ui.appDark, windowId ? spaceLookSource(s.settings) : "utility", palette);
   });
 }
 

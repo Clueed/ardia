@@ -755,25 +755,38 @@ class CommandRunner:
         task.add_done_callback(self.tasks.discard)
 
     async def _run(self, event: dict) -> None:
-        connection = self.service.connection
-        if connection is None or connection.closed:
-            self.log.write(f"hook {self.hook.name}: Ardia isn't connected; {self.hook.command} didn't run")
+        from ardia_cli import endpoint as endpoints
+
+        name, command = self.hook.name, self.hook.command
+        try:
+            session = endpoints.session_id()
+        except endpoints.SessionError as error:
+            self.log.write(f"hook {name}: {command} didn't run: {error}")
+            return
+        if session is None:
+            self.log.write(f"hook {name}: {command} didn't run: command hooks run through a session; start ardia hooks run with $ARDIA_SESSION from ardia connect")
             return
         data = event.get("data") if isinstance(event.get("data"), dict) else {}
-        params = {"command": self.hook.command}
-        if self.hook.arg is not None:
-            params["arg"] = self.hook.arg
         window = data.get("windowId") if "windowId" in data else data.get("focusedWindowId") if event.get("event") == "app.launched" else None
-        if isinstance(window, str):
-            params["window"] = window
-        if isinstance(data.get("tabId"), str) and self.service.scopes.get(self.hook.command) == "page":
-            params["tab"] = data["tabId"]
+        window = window if isinstance(window, str) else None
+        tab = data["tabId"] if isinstance(data.get("tabId"), str) and self.service.scopes.get(command) == "page" else None
+        root = self.service.socket_path.parent
+
+        def send():
+            return endpoints.run_command(endpoints.require_control(root), session, command, self.hook.arg, window, tab)
+
         try:
-            await connection.call("run", params, timeout=10)
-        except control.MethodError as error:
-            self.log.write(f"hook {self.hook.name}: {self.hook.command}: {error.message}")
-        except control.Unreachable as error:
-            self.log.write(f"hook {self.hook.name}: {self.hook.command} may not have run: {error}")
+            await asyncio.to_thread(send)
+        except endpoints.RouteError as error:
+            hint = " (command hooks run with the runner's session, which runs only commands kept to its profile)" if error.code == "refused" else ""
+            self.log.write(f"hook {name}: {command}: {error.message}{hint}")
+        except endpoints.RouteLost as error:
+            if error.sent:
+                self.log.write(f"hook {name}: {command} may not have run: {error}")
+            else:
+                self.log.write(f"hook {name}: {command} didn't run: {error}")
+        except endpoints.EndpointError as error:
+            self.log.write(f"hook {name}: {command} didn't run: {error}")
 
     def close(self) -> None:
         pass

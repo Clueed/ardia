@@ -11,5 +11,6 @@ struct NotificationOptions: Record {
   @Field var windowId: String?
   @Field var origin: String?
   @Field var dismissible: Bool = false
+  @Field var allowDeny: Bool = false
   @Field var data: [String: Any]?
 }

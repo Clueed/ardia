@@ -13,7 +13,8 @@ START_TIMEOUT = 15.0
 MAX_RESPONSE = 256 * 1024 * 1024
 
 
-def endpoint_key(ws: str | None, port: int | None, root: Path) -> tuple[str, str]:
+def endpoint_key(ws: str | None, port: int | None, root: Path, ardia_session: str | None = None) -> tuple[str, str]:
+    import hashlib
     from urllib.parse import urlsplit
 
     url = ws or (None if port is not None else os.environ.get("ARDIA_CDP_URL"))
@@ -22,6 +23,8 @@ def endpoint_key(ws: str | None, port: int | None, root: Path) -> tuple[str, str
         return f"ws:{parts.scheme}://{parts.netloc}{parts.path}", f"{parts.netloc}{parts.path}"
     if port is not None:
         return f"port:{port}", f"--port {port}"
+    if ardia_session:
+        return f"token:{root}:{hashlib.sha256(ardia_session.encode()).hexdigest()[:32]}", "Ardia"
     return f"token:{root}", "Ardia"
 
 

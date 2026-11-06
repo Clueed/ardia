@@ -9,7 +9,7 @@ import sys
 import traceback
 
 from ardia_cli import guard
-from ardia_cli.endpoint import NOT_REACHABLE, Endpoint, EndpointError
+from ardia_cli.endpoint import Endpoint, EndpointError, SessionError, lost_error
 from ardia_cli.redact import redact
 
 PAGE_SCHEMES = ("http:", "https:", "about:", "data:", "blob:")
@@ -108,18 +108,18 @@ class Session:
         except NoValidTabFound:
             pass
         except Exception as error:
-            raise EndpointError(self._unreachable(error)) from None
+            raise await self._unreachable(error) from None
 
-    def _unreachable(self, error: BaseException) -> str:
+    async def _unreachable(self, error: BaseException) -> EndpointError:
         if self.endpoint.explicit:
             detail = str(error) or type(error).__name__
-            return redact(f"can't connect to {self.endpoint.source} ({detail})")
-        return NOT_REACHABLE
+            return EndpointError(redact(f"can't connect to {self.endpoint.source} ({detail})"))
+        return await asyncio.to_thread(lost_error, self.endpoint)
 
-    def lost(self) -> str:
+    async def lost(self) -> EndpointError:
         if self.endpoint.explicit:
-            return redact(f"lost the connection to {self.endpoint.source}")
-        return NOT_REACHABLE
+            return EndpointError(redact(f"lost the connection to {self.endpoint.source}"))
+        return await asyncio.to_thread(lost_error, self.endpoint)
 
     def browser_socket(self):
         return self.browser._connection_handler._ws_connection
@@ -226,7 +226,7 @@ class Session:
             pass
 
 
-def build_namespace(session: Session, filename: str, data_root=None) -> dict:
+def build_namespace(session: Session, filename: str, data_root=None, session_id: str | None = None) -> dict:
     import pydoll
     from pydoll.constants import By, Key
 
@@ -266,61 +266,29 @@ def build_namespace(session: Session, filename: str, data_root=None) -> dict:
             raise RuntimeError(f"JavaScript error: {message}")
         return result["result"].get("value")
 
-    from ardia_cli import browsing
+    from ardia_cli import api, browsing
 
-    async def pinned():
-        return await browsing.run_bounded(browsing.pinned, data_root)
-
-    async def history(days: float = 1, limit: int | None = 200, profile: str | None = None, domains: bool = False):
-        return await browsing.run_bounded(browsing.history, data_root, days=days, limit=limit, profile=profile, domains=domains)
-
-    from ardia_cli import control
+    ardia = api.Ardia(data_root, session.endpoint.session or session_id)
 
     async def run(command: str, arg: str | None = None, window=None, tab=None):
-        params = {"command": command}
-        if arg is not None:
-            params["arg"] = arg
-        if window is not None:
-            params["window"] = window
-        if tab is not None:
-            params["tab"] = tab
-        connection = await control.open_control(data_root)
-        try:
-            return await connection.call("run", params)
-        finally:
-            await connection.close()
-
-    async def windows():
-        connection = await control.open_control(data_root)
-        try:
-            return await connection.call("windows")
-        finally:
-            await connection.close()
-
-    async def events(*names: str, full_urls: bool = False):
-        wanted = control.check_events(names) or ["*"]
-        connection = await control.open_control(data_root)
-        try:
-            await connection.subscribe(wanted, {"fullUrls": True} if full_urls else None)
-            while True:
-                yield await connection.next_event()
-        finally:
-            await connection.close()
+        return await asyncio.to_thread(ardia.run, command, arg, window, tab)
 
     namespace["run"] = run
-    namespace["windows"] = windows
-    namespace["events"] = events
-    namespace["CommandError"] = control.MethodError
-    namespace["ControlUnreachable"] = control.Unreachable
+    namespace["windows"] = ardia.windows
+    namespace["events"] = ardia.events
+    namespace["SessionError"] = SessionError
+    namespace["CommandError"] = api.Refused
+    namespace["ControlUnreachable"] = api.Unreachable
     namespace["js"] = js
-    namespace["pinned"] = pinned
-    namespace["history"] = history
+    namespace["pinned"] = ardia.pinned
+    namespace["open_tabs"] = ardia.open_tabs
+    namespace["history"] = ardia.history
     namespace["BrowsingDataError"] = browsing.BrowsingDataError
     namespace["NoPageTab"] = NoPageTab
     return namespace
 
 
-async def run_code(source: str, filename: str, endpoint: Endpoint, timeout: float | None, data_root=None):
+async def run_code(source: str, filename: str, endpoint: Endpoint, timeout: float | None, data_root=None, session_id: str | None = None):
     body, tail, names = compile_code(source, filename)
     loop = asyncio.get_running_loop()
     main = asyncio.current_task()
@@ -329,7 +297,7 @@ async def run_code(source: str, filename: str, endpoint: Endpoint, timeout: floa
     session = Session(endpoint)
     try:
         await session.connect()
-        namespace = build_namespace(session, filename, data_root)
+        namespace = build_namespace(session, filename, data_root, session_id)
         active = await session.active_target()
         tabs = await session.page_tabs(active)
         namespace["tabs"].extend(tabs)
@@ -360,7 +328,7 @@ async def run_code(source: str, filename: str, endpoint: Endpoint, timeout: floa
             if running in done:
                 return running.result()
             if closed is not None and closed in done:
-                raise EndpointError(session.lost())
+                raise await session.lost()
             raise ExecTimeout(f"timed out after {timeout:g}s")
         finally:
             for task in (running, closed):
