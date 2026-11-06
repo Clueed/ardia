@@ -6,32 +6,38 @@ A personal fork of [mantrakp04/ardia](https://github.com/mantrakp04/ardia), buil
 
 - `main` mirrors upstream exactly. Never commit to it.
 - `mine` is `main` plus the fork's commits. Keep them few and small: new files over edits to upstream ones.
+- Work meant for upstream goes on its own branch cut from `main`, pushed to `origin`, and opened as a PR against
+  `mantrakp04/ardia`.
+
+## For agents
+
+These override `AGENTS.md` in this fork:
+
+- Never commit to `main`, despite "commit straight to `main`". Fork changes are commits on `mine`.
+- Never force-push `mine` without asking.
+- To take upstream's changes, run `scripts/fork/update.sh`, not the steps by hand.
 
 ## Set up a clone
 
 ```sh
 git clone https://github.com/Clueed/ardia.git && cd ardia
-git remote add upstream https://github.com/mantrakp04/ardia.git
-git remote set-url --push upstream DISABLE
-git config remote.pushDefault origin
-git config rerere.enabled true
-git config rebase.updateRefs true
-git config pull.rebase true
-git config alias.sync '!git fetch upstream && git fetch upstream main:main && git push origin upstream/main:refs/heads/main'
-git switch mine
+git fetch origin mine && git checkout -b mine --track origin/mine
+scripts/fork/setup.sh
 ```
+
+`setup.sh` adds `upstream` with pushing to it turned off, turns on rerere and the rebase settings, and adds a
+`git sync` alias. It is safe to run again.
 
 ## Take upstream's changes
 
 ```sh
-git sync
-git rebase main
-git range-diff main@{1} mine@{1} main mine
-git push --force-with-lease origin mine
+scripts/fork/update.sh            # sync main, rebase mine, range-diff, build
+scripts/fork/update.sh --push     # the same, then force-push mine with lease
 ```
 
-`git sync` fast-forwards `main` from upstream and pushes it to the fork; run it from `mine`, not `main`.
-rerere replays conflict resolutions it has seen before. `range-diff` shows what the rebase did to the fork's commits.
+It fast-forwards `main` from upstream and pushes it to the fork, rebases `mine` onto it, and prints a `range-diff`
+of what the rebase did to the fork's commits. On a conflict it stops mid-rebase: resolve, `git rebase --continue`,
+run it again. rerere replays resolutions it has seen before. `--no-build` skips the build.
 
 ## Build
 
