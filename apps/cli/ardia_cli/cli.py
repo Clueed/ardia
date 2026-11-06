@@ -77,6 +77,18 @@ Endpoint: --ws, else --port (plain DevTools servers only), else $ARDIA_CDP_URL, 
 <data dir>/ArdiaGateway.json with --data-dir or $ARDIA_DATA_DIR, else the installed Ardia's, which needs
 --session ID or $ARDIA_SESSION from ardia connect.
 """
+MCP_DESCRIPTION = """\
+Serve Ardia to an MCP client over stdio: the same calls as the ardia command, as MCP tools (profiles, connect,
+disconnect, rename, run, commands, windows, wait_for_event, browse, history, pinned, open_tabs). exec isn't one.
+
+The server keeps the session: the client calls connect (or the server starts with --session ID or $ARDIA_SESSION),
+and no tool ever returns the token. The agent name the owner sees is connect's agent, else $ARDIA_AGENT, else the
+client's name.
+
+Add it to a client, for example:
+  claude mcp add ardia -- ardia mcp
+  codex mcp add ardia -- ardia mcp
+"""
 SKILLS_DESCRIPTION = """\
 Install the ardia agent skill (SKILL.md and a pydoll reference) so coding agents know how to drive Ardia.
 
@@ -133,6 +145,10 @@ def build_parser():
     rename.add_argument("--session", metavar="ID", help="the session from ardia connect (default: $ARDIA_SESSION)")
     rename.add_argument("--data-dir", metavar="DIR", help=data_help)
 
+    mcp = commands.add_parser("mcp", help="serve Ardia to an MCP client over stdio", description=MCP_DESCRIPTION, formatter_class=argparse.RawDescriptionHelpFormatter)
+    mcp.add_argument("--session", metavar="ID", help="start with this session from ardia connect (default: $ARDIA_SESSION, else none until connect)")
+    mcp.add_argument("--data-dir", metavar="DIR", help=data_help)
+
     skills = commands.add_parser("skills", help="install the ardia agent skill")
     skill_commands = skills.add_subparsers(dest="skills_command", metavar="<command>")
     install = skill_commands.add_parser(
@@ -180,6 +196,10 @@ def main(argv: list[str] | None = None) -> int:
         return run_exec(args, parser)
     if args.command in ("profiles", "connect", "disconnect", "rename"):
         return run_session_command(args)
+    if args.command == "mcp":
+        from ardia_cli import mcp
+
+        return mcp.main(args.data_dir, args.session)
     if args.command == "skills":
         if args.skills_command != "install":
             parser.parse_args(["skills", "--help"])

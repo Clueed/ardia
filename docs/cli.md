@@ -64,6 +64,7 @@ the pins into `pyproject.toml`).
   socket, so turning the setting off ends an idle run at once), 6 no session or it ended, 130 interrupted.
 - `ardia browse <command> [args]` takes agent-browser's commands, flags and output against the running Ardia, in the
   session's profile (`--ardia-session ID` or `$ARDIA_SESSION`; see The `ardia browse` command).
+- `ardia mcp [--session ID] [--data-dir DIR]` serves the same calls to an MCP client over stdio (see The MCP server).
 - `ardia skills install --target general|codex|claude-code|cursor|opencode [--target …] [--project]` installs the
   agent skill (`ardia_cli/skill`: `SKILL.md`, `references/pydoll.md` and `references/browse.md`) into `~/.agents/skills` (general, codex),
   `~/.claude/skills`, `~/.cursor/skills` or `~/.config/opencode/skills`; with `--project`, into `./.agents/skills`,
@@ -97,7 +98,7 @@ an `execute_commands` batch (checked whole before anything is sent) or straight 
 exception or Ctrl-C) it closes only its own page and browser WebSockets. Its WebSockets always connect directly,
 ignoring `http_proxy`, `ws_proxy` and the like, so no proxy sees the token.
 
-## One API under the CLI
+## One API under the CLI and the MCP server
 
 `ardia_cli/api.py` is the only layer that talks to Ardia for the session, automation and browsing-data calls. `Ardia(root,
 session)` (or `Ardia.at(data_dir, session)`) has `profiles()`, `connect(name, new, agent, on_waiting, sleep)`,
@@ -114,6 +115,29 @@ The CLI commands (`profiles`, `connect`, `disconnect`, `rename`, `run`, `command
 text and map `kind` to exit codes; `exec`'s `run`, `windows`, `events`, `history`, `pinned` and `open_tabs` are its
 methods. `events`, `on` and `hooks` keep their own socket handling (raw lines, drop counts, programs), and `browse` its
 daemon.
+
+## The MCP server
+
+`ardia mcp` is a stdio MCP server (JSON-RPC, protocol 2025-06-18, 2025-03-26 or 2024-11-05, whichever the client asks
+for) written on the API, with no MCP library (`ardia_cli/mcp.py`). Add it with `claude mcp add ardia -- ardia mcp` or
+`codex mcp add ardia -- ardia mcp`. Tools: `profiles`, `connect(name, new, agent)`, `disconnect`, `rename(name)`,
+`run(command, arg, window, tab)`, `commands`, `windows`, `wait_for_event(events, timeout ≤ 300 s, full_urls)` (the next
+event, or `{timedOut: true}`), `browse(args)`, `history(days, limit, profile, domains)`, `pinned`, `open_tabs(profile)`.
+There's no `exec`: a client that can call tools shouldn't get arbitrary Python on the owner's Mac.
+
+- **Session.** The server holds it: from `--session`/`$ARDIA_SESSION` at start, else from `connect`. No tool returns it,
+  and every line the server writes is redacted. Tools that need one answer `call connect first` until then. A session
+  the server opened with `connect` is disconnected when the client goes away (stdin closes) or connects again; one it
+  was given stays open.
+- **connect** names the agent from its `agent` argument, else `$ARDIA_AGENT`, else the client's `clientInfo.name`. On one
+  of the owner's profiles it sends a `notifications/progress` (`Waiting for the owner to allow it in Ardia`) when the
+  client gave a `progressToken`, then waits up to 120 s; `notifications/cancelled` withdraws the request.
+- **browse** runs `ardia browse --json ARGS` with the session in the environment (never argv) and returns its `data`;
+  a batch returns `{batch: [...]}`.
+- **Results.** A tool's data is both `structuredContent` (lists wrapped, like `{profiles: [...]}`) and JSON text. A
+  failure is `isError: true` with `{error: kind, code, message}`: the API's kinds, plus `browse` with agent-browser's
+  code (`unknown_ref`, `stale_ref`, …). Unknown tools, unknown or missing arguments and wrong types are JSON-RPC
+  `-32602`. Calls run concurrently; `ping` answers while one waits.
 
 ## The `ardia browse` command
 
@@ -643,5 +667,6 @@ control server when the port switch is set) and with control on, for example a s
 Unit tests (matching parity with node, import confinement, store rollback and recovery, symlink refusal; config
 and theme commands against hand-written schemas in `tests/fixtures` that use every keyword of the subset; connect
 allowed, denied, expired and cancelled, session refusal and redaction against a fake control server, agent-profile
-filtering in the helpers):
+filtering in the helpers; the MCP server over a real stdio pipe: tools and schemas, connect with progress, cancel and
+exit cleanup, tool errors, no token on the wire):
 `uv run --no-project --python 3.13 --with-requirements apps/cli/requirements.lock python -m unittest discover -s apps/cli/tests`.
