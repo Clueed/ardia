@@ -5,39 +5,50 @@ A personal fork of [mantrakp04/ardia](https://github.com/mantrakp04/ardia), buil
 ## Branches
 
 - `main` mirrors upstream exactly. Never commit to it.
-- `mine` is `main` plus the fork's commits. Keep them few and small: new files over edits to upstream ones.
-- Work meant for upstream goes on its own branch cut from `main`, pushed to `origin`, and opened as a PR against
-  `mantrakp04/ardia`.
+- `mine` is `main` plus the fork-only commits (bundle ID, no updater, these scripts). Keep them few and small: new
+  files over edits to upstream ones. It is rebased, and never merged into another branch.
+- Feature branches hold the fork's features. Each is cut from `main` (or stacked on another feature) and never
+  contains `mine`, so it can still become a PR against `mantrakp04/ardia`. They take upstream's changes by merging
+  their base and are never rebased. `scripts/fork/features` lists them as `<branch> <base>`, bases first.
+- `fork` is what gets built: `mine` plus a merge of every feature branch. `update.sh` rebuilds it each time, so
+  never commit to it; a fix goes on the feature branch or on `mine`.
 
 ## For agents
 
 These override `AGENTS.md` in this fork:
 
-- Never commit to `main`, despite "commit straight to `main`". Fork changes are commits on `mine`.
-- Never force-push `mine` without asking.
+- Never commit to `main` or `fork`, despite "commit straight to `main`". Fork-only changes are commits on `mine`;
+  feature work goes on its feature branch.
+- Never force-push `mine` without asking, and never rebase a feature branch.
 - To take upstream's changes, run `scripts/fork/update.sh`, not the steps by hand.
+- A new feature: cut its branch from `main`, push it, and add a line for it to `scripts/fork/features` on `mine`.
 
 ## Set up a clone
 
 ```sh
 git clone https://github.com/Clueed/ardia.git && cd ardia
-git fetch origin mine && git checkout -b mine --track origin/mine
+git fetch origin fork && git checkout -b fork --track origin/fork
 scripts/fork/setup.sh
 ```
 
-`setup.sh` adds `upstream` with pushing to it turned off, turns on rerere and the rebase settings, and adds a
-`git sync` alias. It is safe to run again.
+`setup.sh` adds `upstream` with pushing to it turned off, turns on rerere and the rebase settings, adds a
+`git sync` alias, and creates `mine` and `fork` tracking origin's. It is safe to run again.
 
 ## Take upstream's changes
 
 ```sh
-scripts/fork/update.sh            # sync main, rebase mine, range-diff, build
-scripts/fork/update.sh --push     # the same, then force-push mine with lease
+scripts/fork/update.sh            # sync main, rebase mine, merge into features, rebuild fork, build
+scripts/fork/update.sh --push     # the same, then push the features and force-push mine and fork with lease
 ```
 
-It fast-forwards `main` from upstream and pushes it to the fork, rebases `mine` onto it, and prints a `range-diff`
-of what the rebase did to the fork's commits. On a conflict it stops mid-rebase: resolve, `git rebase --continue`,
-run it again. rerere replays resolutions it has seen before. `--no-build` skips the build.
+Run it from `fork` with nothing uncommitted. It fast-forwards `main` from upstream and pushes it to the fork,
+replays `mine` onto it and prints a `range-diff` of what that did, merges each feature's base into it, and rebuilds
+`fork` as `mine` plus every feature. It never checks anything out: other branches move by ref, the checked-out one
+with `git reset --keep`. It builds only when `fork` is checked out; `--no-build` skips that.
+
+On a conflict it stops and names the merge to do by hand: check out that branch, merge its base (or rebase `mine`
+onto `main`), resolve, commit, and run it again. A feature's resolution stays in its history, so it is done once;
+`fork` only conflicts where `mine` and a feature change the same lines.
 
 ## Build
 
@@ -68,7 +79,7 @@ Telemetry is opt-in and off unless you tick it during onboarding; leave it untic
 
 ## Update
 
-Take upstream's changes, run `scripts/fork/build.sh`, quit the app and copy the new `Ardia Fork.app` over the old
+Take upstream's changes from `fork` (that builds it too), quit the app and copy the new `Ardia Fork.app` over the old
 one. The profile lives outside the app, so nothing is lost.
 
 ## Known gaps

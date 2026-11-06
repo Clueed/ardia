@@ -5,8 +5,8 @@
 #   scripts/fork/setup.sh -h | --help
 #
 # Adds the upstream remote with pushing to it turned off, turns on rerere and the rebase settings,
-# adds the `git sync` alias, and creates a local `mine` that tracks origin/mine. It moves the checkout
-# to `mine` only when it is on `main` with nothing uncommitted.
+# adds the `git sync` alias, and creates local `mine` and `fork` that track origin's. It moves the checkout
+# to `fork` only when it is on `main` with nothing uncommitted.
 set -euo pipefail
 
 case "${1:-}" in
@@ -31,13 +31,15 @@ git config alias.sync '!git fetch upstream && git fetch upstream main:main && gi
 git fetch --quiet origin
 git fetch --quiet upstream
 
-if ! git show-ref --verify --quiet refs/heads/mine; then
-  git branch --quiet --track mine origin/mine
-fi
-git branch --quiet --set-upstream-to=origin/mine mine
+for branch in mine fork; do
+  if ! git show-ref --verify --quiet "refs/heads/$branch"; then
+    git branch --quiet --track "$branch" "origin/$branch"
+  fi
+  git branch --quiet --set-upstream-to="origin/$branch" "$branch"
+done
 
 if [ "$(git branch --show-current)" = main ] && [ -z "$(git status --porcelain)" ]; then
-  git switch --quiet mine
+  git switch --quiet fork
 fi
 
 echo "fork: set up, on $(git branch --show-current)"
