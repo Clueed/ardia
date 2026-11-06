@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import shutil
+import signal
 import sqlite3
 import sys
 import tempfile
@@ -164,6 +165,36 @@ class Connect(Base):
         self.assertEqual(out, "")
         cancels = [p for p in fake.routes("/ardia/connect") if p.get("cancel") == "1"]
         self.assertEqual(cancels, [{"token": CONTROL_TOKEN, "request": "r1", "cancel": "1"}])
+
+    def test_terminate_and_hangup_cancel(self):
+        for signum in (signal.SIGTERM, signal.SIGHUP):
+            with self.subTest(signal=signum.name):
+                fake = self.serve(connect_server([{"state": "pending"}]))
+                before = signal.getsignal(signum)
+
+                def stop(_seconds, signum=signum):
+                    signal.raise_signal(signum)
+
+                with mock.patch.object(sessions.time, "sleep", stop):
+                    status, out, err = self.run_cli("connect", "Work")
+                self.assertEqual(status, 128 + signum)
+                self.assertEqual(out, "")
+                self.assertIn("cancelled", err)
+                cancels = [p for p in fake.routes("/ardia/connect") if p.get("cancel") == "1"]
+                self.assertEqual(cancels, [{"token": CONTROL_TOKEN, "request": "r1", "cancel": "1"}])
+                self.assertIs(signal.getsignal(signum), before)
+
+    def test_name_taken_names_the_existing_profile(self):
+        def respond(path, params):
+            if path == "/ardia/profiles":
+                return 200, {"profiles": [{"name": "Personal", "kind": "real"}, {"name": "Scout", "kind": "agent"}]}
+            return 409, {"error": "name-taken"}
+
+        self.serve(respond)
+        status, _, err = self.run_cli("connect", "--new", " scout")
+        self.assertEqual(status, 1)
+        self.assertIn("already named 'Scout'", err)
+        self.assertIn("ardia connect 'Scout' to use it", err)
 
     def test_route_errors_are_one_line(self):
         for code, needle in (("no-such-profile", "no profile is named 'Nope'"), ("name-taken", "already named"), ("bad-name", "isn't a usable")):

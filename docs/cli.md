@@ -26,9 +26,10 @@ the pins into `pyproject.toml`).
   prompt; `NAME` is any existing profile and needs the owner's Allow, so it prints `Waiting for you to allow it in
   Ardia…` on stderr. Then it polls `&request=ID` every 250 ms for at most 120 s. Allowed: stdout gets only the session
   token (with `--json`, `{"session","profile","kind"}`), the one place a token is printed. Exit 1 `no-such-profile`,
-  `name-taken` (for `--new`) or `bad-name` (empty, over 60 characters, control characters), each as one plain line;
-  2 unreachable (also when the control token is unknown, 404); 4 denied; 5 expired or no answer (past its own
-  120 s it sends `&cancel=1`); 130 Ctrl-C, after sending `&cancel=1` (2 s deadline).
+  `name-taken` (for `--new`, naming the existing profile as Ardia spells it) or `bad-name` (empty, over 60 characters,
+  control characters), each as one plain line; 2 unreachable (also when the control token is unknown, 404); 4 denied;
+  5 expired or no answer (past its own 120 s it sends `&cancel=1`); 130 Ctrl-C, 143 SIGTERM and 129 SIGHUP, each after
+  sending `&cancel=1` (2 s deadline), so a killed `connect` never leaves the owner's prompt up.
 - `ardia disconnect [--session ID] [--data-dir DIR]` (`/ardia/disconnect?token=SESSION`) ends the session and closes
   its sockets; prints `disconnected`.
 - `ardia rename NAME [--session ID] [--data-dir DIR]` (`/ardia/rename?token=SESSION&name=NAME`) renames the session's

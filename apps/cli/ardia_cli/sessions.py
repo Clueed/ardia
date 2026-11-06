@@ -1,7 +1,9 @@
 import json
 import os
+import signal
 import sys
 import time
+from contextlib import contextmanager
 
 from ardia_cli.endpoint import (
     SESSION_EXIT,
@@ -27,10 +29,34 @@ INTERRUPTED_EXIT = 130
 WAITING = "Waiting for you to allow it in Ardia…"
 MESSAGES = {
     "no-such-profile": "no profile is named {name!r} (see ardia profiles)",
-    "name-taken": "a profile is already named {name!r}: pick another name, or ardia connect {name!r} to use it",
+    "name-taken": "a profile is already named {existing!r}: pick another name, or ardia connect {existing!r} to use it",
     "bad-name": "{name!r} isn't a usable profile name (1 to 60 characters, no control characters)",
     "not-agent": "this session is on one of the owner's profiles; only agent profiles can be renamed",
 }
+
+
+class Stopped(Exception):
+    def __init__(self, signum: int):
+        super().__init__(signum)
+        self.signum = signum
+
+
+STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
+
+
+@contextmanager
+def stopped_by_signals():
+    def stop(signum, _frame):
+        raise Stopped(signum)
+
+    previous = {}
+    try:
+        for signum in STOP_SIGNALS:
+            previous[signum] = signal.signal(signum, stop)
+        yield
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
 
 
 def complain(command: str, text: str) -> None:
@@ -39,9 +65,22 @@ def complain(command: str, text: str) -> None:
     sys.stderr.flush()
 
 
-def route_message(code: str, name: str | None) -> str:
+def route_message(code: str, name: str | None, control=None) -> str:
     template = MESSAGES.get(code)
-    return template.format(name=name or "") if template else f"Ardia refused it ({code})"
+    if not template:
+        return f"Ardia refused it ({code})"
+    if code == "name-taken" and control is not None and name:
+        return template.format(name=name, existing=existing_name(control, name))
+    return template.format(name=name or "", existing=name or "")
+
+
+def existing_name(control, name: str) -> str:
+    folded = name.strip().lower()
+    try:
+        rows = control_call(control, "profiles").get("profiles") or []
+    except (EndpointError, RouteError):
+        return name
+    return next((str(p["name"]) for p in rows if isinstance(p, dict) and str(p.get("name", "")).strip().lower() == folded), name)
 
 
 def profiles(args) -> int:
@@ -78,25 +117,27 @@ def connect(args, raw_stdout) -> int:
     agent = (args.agent or os.environ.get("ARDIA_AGENT") or "").strip() or DEFAULT_AGENT
     target = {"new": name} if args.new is not None else {"profile": name}
     request = None
+    control = None
     try:
-        control = require_control(data_root(args.data_dir))
-        request = control_call(control, "connect", agent=agent, **target).get("request")
-        if not isinstance(request, str) or not request:
-            raise EndpointError("Ardia gave no request id")
-        if args.new is None:
-            sys.stderr.write(WAITING + "\n")
-            sys.stderr.flush()
-        state = wait_for_answer(control, request)
-    except KeyboardInterrupt:
+        with stopped_by_signals():
+            control = require_control(data_root(args.data_dir))
+            request = control_call(control, "connect", agent=agent, **target).get("request")
+            if not isinstance(request, str) or not request:
+                raise EndpointError("Ardia gave no request id")
+            if args.new is None:
+                sys.stderr.write(WAITING + "\n")
+                sys.stderr.flush()
+            state = wait_for_answer(control, request)
+    except (KeyboardInterrupt, Stopped) as stop:
         if request:
             cancel(control, request)
         complain("connect", "cancelled")
-        return INTERRUPTED_EXIT
+        return 128 + stop.signum if isinstance(stop, Stopped) else INTERRUPTED_EXIT
     except EndpointError as error:
         complain("connect", str(error))
         return UNREACHABLE_EXIT
     except RouteError as error:
-        complain("connect", route_message(error.code, name))
+        complain("connect", route_message(error.code, name, control))
         return 1
     if state is None:
         cancel(control, request)
@@ -155,6 +196,7 @@ def rename(args) -> int:
 
 
 def session_command(args, route: str, done: str, **params) -> int:
+    control = None
     try:
         session = require_session(args.session)
         control = require_control(data_root(args.data_dir))
@@ -166,7 +208,7 @@ def session_command(args, route: str, done: str, **params) -> int:
         complain(route, str(error))
         return UNREACHABLE_EXIT
     except RouteError as error:
-        complain(route, route_message(error.code, params.get("name")))
+        complain(route, route_message(error.code, params.get("name"), control))
         return 1
     sys.stdout.write(done + "\n")
     return 0
