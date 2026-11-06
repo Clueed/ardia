@@ -13,9 +13,14 @@ import { systemInfo } from "../../platform/app";
 import { useBrowser } from "../browser/store";
 import { noteSocketServing } from "../app/cliControl";
 import { errorText } from "../../lib/errors";
+import { minimizedUrl } from "../../lib/urlParts";
 import { automationWindows } from "./automationWindows";
-import { startEventFeed, stopEventFeed, type AutomationEventName } from "./automationEvents";
+import { TAB_IDLE_EVENTS, USER_IDLE_EVENTS, type AutomationEventName } from "./eventNames";
 import { commands, failure, hello, parseRequest, parseSubscription, SOCKET_RUN_REFUSED, type RequestId, type Subscription } from "./automationMethods";
+import { feedNeeds, stopFeed, updateFeed } from "./automationFeed";
+import { answerDecision, dropResponder, serveHooks, stopResponders } from "./decideSocket";
+import { launchToReplay, recordLaunch, runLaunchActions } from "./lifecycleEvents";
+import { startDecideHooks } from "./decideHooks";
 
 export const useControlSocket = create<{ status: ControlSocketStatus | null }>()(() => ({ status: null }));
 
@@ -24,6 +29,7 @@ let applied = false;
 let chain: Promise<void> = Promise.resolve();
 let listening = false;
 const subscriptions = new Map<number, Subscription>();
+const launchSent = new Set<number>();
 
 const controlOn = () => useBrowser.getState().settings.cliControl;
 
@@ -31,15 +37,45 @@ function send(connection: number, id: RequestId, body: Body) {
   replyOnControlSocket(connection, JSON.stringify({ id, ...body }), 0);
 }
 
-function broadcast(name: AutomationEventName, data: Record<string, unknown>) {
-  const targets: number[] = [];
-  for (const [connection, events] of subscriptions) if (events.has(name)) targets.push(connection);
-  if (targets.length) broadcastOnControlSocket(targets, JSON.stringify({ event: name, time: Date.now(), data }));
+const minimized = (data: Record<string, unknown>) => (typeof data.url === "string" ? { ...data, url: minimizedUrl(data.url) } : data);
+
+export function eventTargets(subs: ReadonlyMap<number, Subscription>, name: AutomationEventName, data: Record<string, unknown>) {
+  const full: number[] = [];
+  const plain: number[] = [];
+  for (const [connection, sub] of subs) {
+    if (!sub.events.has(name)) continue;
+    if (TAB_IDLE_EVENTS.has(name) && !sub.tabIdle.has(data.idle as number)) continue;
+    if (USER_IDLE_EVENTS.has(name) && !sub.userIdle.has(data.idle as number)) continue;
+    (sub.fullUrls ? full : plain).push(connection);
+  }
+  return { full, plain };
 }
 
-function updateFeed() {
-  if (subscriptions.size) startEventFeed(broadcast);
-  else stopEventFeed();
+function deliver(name: AutomationEventName, data: Record<string, unknown>, time = Date.now(), only?: number) {
+  const { full, plain } = eventTargets(only === undefined ? subscriptions : new Map([[only, subscriptions.get(only)!]]), name, data);
+  if (full.length) broadcastOnControlSocket(full, JSON.stringify({ event: name, time, data }));
+  if (plain.length) broadcastOnControlSocket(plain, JSON.stringify({ event: name, time, data: minimized(data) }));
+}
+
+function broadcast(name: AutomationEventName, data: Record<string, unknown>) {
+  if (generation === null) return;
+  deliver(name, data);
+}
+
+function refreshFeed() {
+  if (subscriptions.size) updateFeed(feedNeeds(subscriptions.values()), broadcast);
+  else stopFeed();
+}
+
+function replayLaunch(connection: number) {
+  const sub = subscriptions.get(connection);
+  if (!sub?.events.has("app.launched") || launchSent.has(connection)) return;
+  const launch = launchToReplay();
+  if (!launch) return;
+  launchSent.add(connection);
+  setTimeout(() => {
+    if (subscriptions.get(connection)?.events.has("app.launched")) deliver("app.launched", launch.data, launch.time, connection);
+  }, 0);
 }
 
 type Body = { result: unknown } | { error: unknown };
@@ -58,6 +94,18 @@ export function handleControlRequest({ connection, generation: tagged, line }: C
   send(connection, id, body);
 }
 
+function subscribe(connection: number, params: Record<string, unknown>): Body {
+  const sub = parseSubscription(params);
+  if ("error" in sub) return sub;
+  const served = serveHooks(connection, sub.hooks);
+  if ("error" in served) return failure("bad_request", served.error);
+  if (sub.events.size) subscriptions.set(connection, sub);
+  else subscriptions.delete(connection);
+  refreshFeed();
+  replayLaunch(connection);
+  return { result: { ok: true, served: served.served, ...(sub.hooks === undefined || sub.hooks === null ? {} : { revisions: served.revisions }) } };
+}
+
 function answer(connection: number, method: string, params: Record<string, unknown>): Body {
   switch (method) {
     case "hello":
@@ -66,13 +114,11 @@ function answer(connection: number, method: string, params: Record<string, unkno
       return { result: commands() };
     case "windows":
       return { result: automationWindows(useBrowser.getState()) };
-    case "subscribe": {
-      const events = parseSubscription(params);
-      if ("error" in events) return events;
-      if (events.size) subscriptions.set(connection, events);
-      else subscriptions.delete(connection);
-      updateFeed();
-      return { result: { ok: true } };
+    case "subscribe":
+      return subscribe(connection, params);
+    case "answer": {
+      const answered = answerDecision(connection, params);
+      return "error" in answered ? failure("bad_request", answered.error) : { result: answered };
     }
     case "run":
       return failure("refused", SOCKET_RUN_REFUSED);
@@ -81,7 +127,9 @@ function answer(connection: number, method: string, params: Record<string, unkno
 }
 
 function handleClose({ connection }: { connection: number }) {
-  if (subscriptions.delete(connection)) updateFeed();
+  launchSent.delete(connection);
+  dropResponder(connection);
+  if (subscriptions.delete(connection)) refreshFeed();
 }
 
 function listen() {
@@ -110,7 +158,9 @@ async function stop() {
   generation = null;
   noteSocketServing(false);
   subscriptions.clear();
-  stopEventFeed();
+  launchSent.clear();
+  stopResponders();
+  stopFeed();
   await stopControlSocket();
   useControlSocket.setState({ status: null });
 }
@@ -122,6 +172,7 @@ function sync() {
   if (!on) {
     generation = null;
     noteSocketServing(false);
+    stopResponders();
   }
   chain = chain
     .then(() => (on ? start() : stop()))
@@ -136,6 +187,9 @@ let started = false;
 export function startAutomation() {
   if (started) return;
   started = true;
+  startDecideHooks();
+  recordLaunch();
+  runLaunchActions();
   sync();
   useBrowser.subscribe((s, prev) => {
     if (s.settings !== prev.settings) sync();

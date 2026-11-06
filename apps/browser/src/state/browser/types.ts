@@ -17,6 +17,7 @@ export type Profile = {
   theme?: ProfileTheme | null;
   pinnedCollapsed?: boolean;
   kind?: "agent";
+  ownTopApps?: boolean;
 };
 
 type WindowBase = {

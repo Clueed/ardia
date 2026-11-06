@@ -34,7 +34,8 @@ the pins into `pyproject.toml`).
 - `ardia rename NAME [--session ID] [--data-dir DIR]` (`/ardia/rename?token=SESSION&name=NAME`) renames the session's
   agent profile; prints `renamed to NAME`. Exit 1 for `not-agent` (a real profile), `bad-name` or `name-taken`.
 - `exec`, `run`, `scripts test`, `disconnect` and `rename` take the session from `--session ID`, else `$ARDIA_SESSION`; there's
-  no "most recent" default. On the token path, without one they print one line (`Connect first: run ardia connect
+  no "most recent" default. `browse` takes it from `--ardia-session ID`, else `$ARDIA_SESSION` (its `--session` is
+  agent-browser's session name). On the token path, without one they print one line (`Connect first: run ardia connect
   --new NAME … then pass --session ID or set $ARDIA_SESSION.`) and exit 6. A session Ardia doesn't know (ended by
   `disconnect`, quit, control off or 30 minutes idle, or mistyped) also exits 6 with `That session has ended …`:
   `disconnect` and `rename` get a 404; `exec` and `scripts test` ask `/ardia/active` after the browser socket fails
@@ -53,27 +54,35 @@ the pins into `pyproject.toml`).
   `new_tab(url, background=True)` (in the session's profile), `js(expression, tab=None)` (default: `tab`, else the last
   `new_tab`), `await pinned()`, `await open_tabs(profile=None)`,
   `await history(days=1, limit=200, profile=None, domains=False)` (see Browsing data), `await run(command, arg=None,
-  window=None)` (through the gateway with the run's session), `await windows()` and `async for e in events(*names)`
+  window=None, tab=None)` (through the gateway with the run's session), `await windows()` and `async for e in events(*names)`
   (over the control socket, no session) (see `docs/automation.md`), `By`, `Key`,
   `asyncio`, pydoll's exports and its common exceptions. It prints the last expression's value. Exit 0 done, 1 the
   code raised or timed out (default 300 s), 2 Ardia can't be reached or closed the browser socket (it watches the
   socket, so turning the setting off ends an idle run at once), 6 no session or it ended, 130 interrupted.
+- `ardia browse <command> [args]` takes agent-browser's commands, flags and output against the running Ardia, in the
+  session's profile (`--ardia-session ID` or `$ARDIA_SESSION`; see The `ardia browse` command).
 - `ardia skills install --target general|codex|claude-code|cursor|opencode [--target …] [--project]` installs the
-  agent skill (`ardia_cli/skill`: `SKILL.md` and `references/pydoll.md`) into `~/.agents/skills` (general, codex),
+  agent skill (`ardia_cli/skill`: `SKILL.md`, `references/pydoll.md` and `references/browse.md`) into `~/.agents/skills` (general, codex),
   `~/.claude/skills`, `~/.cursor/skills` or `~/.config/opencode/skills`; with `--project`, into `./.agents/skills`,
   `./.claude/skills`, `./.cursor/skills` or `./.opencode/skills`. It replaces only its own `ardia` folder.
 - `ardia scripts new|test|install|uninstall|list` writes, tests and installs userscripts (see Userscripts).
 - `ardia config path|init|get|set|unset|list|edit|check` reads, writes and checks `config.json` (see
   `docs/config.md`, The ardia command). Never needs Ardia running.
 - `ardia theme new|use|list|check` makes, picks and checks colour themes (see `docs/config.md`).
-- `ardia run COMMAND [ARG] [--window ID] [--session ID]` runs one of Ardia's commands in the session's profile through
-  the gateway's `/ardia/run` route (see `docs/automation.md`); exit 6 without a live session.
+- `ardia run COMMAND [ARG] [--window ID] [--tab ID] [--session ID]` runs one of Ardia's commands in the session's
+  profile through the gateway's `/ardia/run` route (see `docs/automation.md`); `--tab` targets one tab without focusing
+  it; exit 6 without a live session.
 - `ardia commands` lists the commands `run` takes (see `docs/automation.md`).
 - `ardia windows` lists the windows and their tabs (see `docs/automation.md`).
 - `ardia events [EVENT…]` streams browser events (see `docs/automation.md`).
 - `ardia on EVENT[,EVENT…] -- PROGRAM` runs a program for each event (see `docs/automation.md`).
 - `ardia hooks run|install|uninstall|list` runs the hooks in `hooks.json`, at login through a LaunchAgent (see
-  `docs/automation.md`).
+  `docs/automation.md`). Hook programs inherit the runner's environment, so one that calls `ardia run` needs a session
+  like any other caller: `$ARDIA_SESSION` set where the runner starts, or its own `ardia connect`; without one it
+  exits 6 and the hook's output in `hooks.log` says so. `command` hooks send `/ardia/run` through the gateway with the
+  runner's `$ARDIA_SESSION` (the event's window, and its tab for page commands); without a session, or for a command
+  a session refuses, the hook logs why to `hooks.log` and nothing runs. The login LaunchAgent has no session, so its
+  command hooks don't run.
 - `ardia --version`, `ardia --help`, `ardia exec --help`, `ardia scripts <command> --help`,
   `ardia config <command> --help`, `ardia theme <command> --help`, `ardia hooks <command> --help` and `--help` on
   each of `run`, `commands`, `windows`, `events` and `on`.
@@ -84,6 +93,263 @@ refuses fragmented sends), so
 an `execute_commands` batch (checked whole before anything is sent) or straight on the socket. On exit (normal, an
 exception or Ctrl-C) it closes only its own page and browser WebSockets. Its WebSockets always connect directly,
 ignoring `http_proxy`, `ws_proxy` and the like, so no proxy sees the token.
+
+## The `ardia browse` command
+
+`ardia browse` gives agent-browser's command line (0.35: commands, flags, `@eN` refs, text output with `✓`/`✗`, and
+`--json` as `{"success","data","error"}`) on top of the running Ardia, so an agent that knows `agent-browser <args>`
+types `ardia browse <args>`. None of agent-browser's code is used. Code: `ardia_cli/browse/` (`cli.py` parses the
+globals and runs the commands that need no browser, `daemon.py` owns the connection, `commands.py`, `actions.py`,
+`snapshot.py`, `capture.py`, `media.py`, `audit.py`, `react.py`, `vault.py`, `plugins.py`, `readurl.py`).
+
+### Process model
+
+Each session has a background daemon that owns the CDP connection, the refs, the tabs it opened and the tracked
+mouse position, so a humanized path starts where the last one ended. `ardia browse` talks to it over a Unix socket.
+
+- Everything lives in `<data dir>/Browse/` (the data dir as `exec` finds it; with `--port` or `--ws`,
+  `--data-dir`/`$ARDIA_DATA_DIR`, else the installed app's). The folder is created 0700 and must be a real folder the
+  user owns (`O_NOFOLLOW`, checked by `fstat`); every file in it is opened relative to it.
+- A session's files are named by `sha256(namespace, endpoint, session)`, never by the session name (on the token path
+  the endpoint includes a hash of the ardia session, so each `ardia connect` session gets its own daemon), which must match
+  `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`: `<key>.lock`, `<key>.sock`, `<key>.json` (session name, pid) and `<key>.log`
+  (the daemon's redacted stderr). The socket is bound and connected by a relative name after `fchdir` into the
+  folder, so a long data dir never hits the 104-byte `sun_path` limit.
+- The daemon holds an exclusive `flock` on `<key>.lock` for its whole life. Only with that lock held does it treat
+  an existing `<key>.sock` as stale and unlink it; it binds with umask 0177 so the socket is 0600 from the start,
+  records the socket's inode, and at exit unlinks it only if it's still that inode. Both ends check the other's
+  uid with `LOCAL_PEERCRED`; the client also checks the socket is a socket, owned and 0600.
+- On the token path the client needs an ardia session (`--ardia-session ID`, else `$ARDIA_SESSION`) before it
+  starts or asks a daemon: without one it prints the `Connect first` line and exits 6, like `exec`. The daemon
+  connects to the gateway with that session token, so it sees only the session's profile.
+- The client starts the daemon (`python -I -c`, its config on stdin, never argv or env) when the socket doesn't
+  answer, and waits up to 15 s. A request is one JSON line; the daemon serializes commands, so one gesture never
+  interleaves with another, and cancels a command whose client went away (Ctrl-C).
+- **Idle disconnect.** After 30 s with no admitted or queued command, no held key or button and no capture lease
+  (console or errors, network log, HAR, route, trace, record, stream, init scripts, emulation), the daemon drops the
+  CDP connection so the control pill goes away, but keeps its state. The next command reconnects: it re-reads and
+  re-checks `ArdiaGateway.json` (or `/json/version`) and refuses, ending the session, if the browser instance
+  (the gateway file's `pid:generation:browser path`, or the browser WebSocket path) changed. If the ardia session
+  ended meanwhile (`/ardia/active?token=SESSION` is a 404), the command exits 6 with the session-ended line. Admission and the idle check run on one
+  event loop under the command lock, so a disconnect never races a command.
+- **Connection loss is terminal.** When Ardia closes the connection itself (Stop, control turned off, Ardia quit,
+  `ardia disconnect`), the session ends (exit 6 with the session-ended line when the gateway no longer knows the
+  ardia session, else exit 2): queued commands fail, nothing reconnects and nothing is replayed. pydoll's `ConnectionHandler`
+  is subclassed so it never reconnects on its own, with a 256 MB `max_size`. A link found dead when a command
+  starts is treated the same way, before any endpoint is resolved again; only the daemon's own idle disconnect
+  reconnects. A command that may already have been dispatched is never retried; it reports that its outcome is
+  unknown (exit 2 on connection loss, 1 otherwise). That covers a timeout on any method that changes something
+  (`Page.navigate`, `Page.reload`, `Target.createTarget`/`closeTarget`/`activateTarget`, `Input.*`, `Emulation.*`,
+  cookie, Fetch and download methods, `eval`, and every isolated-world call that isn't marked as a read), a daemon
+  that goes away after taking a mutating command, and batch: after an unknown outcome the rest of the batch isn't
+  run and is reported as `not_run`. Isolated-world reads are retried once when the document changes under them;
+  writes (`history.go`, `storage set`, `select`, `pushstate`, scripted scrolls) fail with `document_changed` and are
+  never replayed on the new document.
+- `close` takes the command lock, marks the session closing, and only then closes its tabs; requests already queued
+  or arriving later get `session_closing`. On any stop the daemon lets running handlers settle (up to 5 s, then
+  cancels them) before it touches the browser. Every answer is sanitized (registered tokens and any `token=` query
+  are masked in each JSON field and in the text) before it's written, and the daemon refuses to send an answer over
+  256 MB.
+- While disconnected the daemon watches `ArdiaGateway.json` every 2 s and exits when it disappears or names another
+  instance. It also exits after `--idle-timeout`/`AGENT_BROWSER_IDLE_TIMEOUT_MS` (default 1 h) without commands, and
+  on `close`. It takes a lease on its CLI version like `ardia` does.
+- Sessions (`--session`, `AGENT_BROWSER_SESSION`, default `default`; `--namespace`) are command-state namespaces on
+  the same Ardia, not isolated browsers: cookies, storage and logins are the user's in all of them. A capture or
+  route claims its tab in `Browse/claims/` (checked against the owner's lock), and a second live session is refused
+  on a tab another one owns. The claim is taken before the CDP domain is enabled (console and errors, including
+  `open --capture-console`, network, HAR, route and credentials, trace, record, stream), dropped if enabling fails,
+  and released by the matching stop (`har stop`, `unroute` of the last route, `trace`/`profiler stop`,
+  `record stop`, `stream disable`) or when the session ends.
+
+### Refs
+
+Refs keep agent-browser's `@eN` form with stable numbers: a node (same browser instance, target, frame, document
+and backend node id) keeps its number across snapshots and `find`, so repeat snapshots of an unchanged page give
+identical refs. A node seen for the first time takes the next unused number, and a number never moves to another
+node, so a delayed `click @e1` can't land on a different element; once its node or document is gone it fails as
+stale. Numbers keep rising across documents (a new page's nodes are new nodes), and refs of documents a tab has left
+are forgotten. Each ref keeps the browser instance, target id, frame id,
+the frame's loader id, the snapshot generation and the backend DOM node id (with role and name for display). A ref
+resolves only within that lifetime: the instance must match, the frame must still have the same loader
+(`Page.getFrameTree`), and `DOM.resolveNode` must find the node, connected, in the isolated world. Anything else is
+`Stale ref @eN: <why>. Run snapshot again` (`code: "stale_ref"`); there's no fallback by role or name. Refs survive
+the idle disconnect (backend node ids outlive CDP sessions). `find` gives its element the next ref.
+
+### Input
+
+Humanized input is on by default and goes through pydoll's own classes: `Mouse` (`click`, `dblclick`, `hover`,
+`drag`, `mouse move`; Bézier paths with Fitts timing, overshoot and tremor, press and hold timing), `Scroll`
+(`scroll`, `scrollintoview`, and scrolling a target into view before a click), and `Keyboard` (`type`, `fill`
+(click in, select all, Backspace, then type), `keyboard type`, `press`). pydoll's default timing is kept. Typos are
+off: `SteadyKeyboard` overrides `Keyboard._should_make_typo` to return False, and `tests/test_browse.py` fails if a
+pydoll update renames it or stops routing humanized typing through it. `keyboard inserttext` stays an instant
+`Input.insertText`. `--no-humanize` turns it off for one command, `AGENT_BROWSER_NO_HUMANIZE=1` for the session.
+`fill` and `type` follow a field the page swaps out when it's focused (Wikipedia's Vector 2022 search box mounts a new
+input on first focus): if the target is detached after the focusing click or `DOM.focus`, and focus sits on an
+editable field in the same frame and document that matches it (same tag and type, and a shared id, name, placeholder,
+aria-label or title), they type there and report `retargeted: true` (the text output says so too). Anything else
+fails with `element_replaced` and types nothing. `auth login` never follows a replacement. Click points get a small
+random offset inside the box; a click whose point is covered fails with
+`covered by <tag#id.class>`.
+
+Every input command confirms the page got it. Capture listeners in the isolated world count trusted `mousedown`,
+`mouseup`, `mousemove`, `keydown`, `keyup` and `wheel` events in the target's frame; after the gesture the command
+waits up to 1.5 s for the counts it needs (a click's `mousedown` and `mouseup`, one `keydown` and `keyup` per typed
+character, a `wheel` per scroll, a `beforeinput` or `input` for `keyboard inserttext`). If the listeners can't be set
+up the command fails before sending anything (`input_unconfirmable`). If none of the events arrive it fails with
+`input_not_delivered`; if only some do (a `mousedown` without its `mouseup`), or confirmation fails after sending, it
+reports an unknown outcome, since part of the gesture may have landed. A navigation or a closed frame counts as
+delivered, and so do keys sent while focus is in an iframe and a raw `mouse` event over one, since those land in
+another frame. The listeners add no DOM and nothing the page's world can enumerate.
+
+Held keys and buttons are tracked before each dispatch, and a gesture that's interrupted releases them in a
+bounded (2 s), shielded `finally`; `keydown` and `mouse down` stay held across commands on purpose (and keep the
+connection up). An interrupted drag reports an unknown outcome. HTML5 `draggable` sources are refused: without
+`Input.setInterceptDrags` (gated) a synthetic drag becomes a real macOS drag session.
+
+Chrome doesn't deliver mouse or keyboard input to a hidden tab, and a tab `open` puts in the background is hidden.
+Input commands check `document.visibilityState` first and fail with an explanation instead of reporting a click
+that never happened. `open --show`, `tab new --show`, `tab <id> --show` or `AGENT_BROWSER_SHOW_TAB=1` show the tab
+(`Target.activateTarget`, retried until the page reports visible). `scroll` on a hidden tab keeps pydoll's
+humanized timing but applies each step with `scrollBy` in the isolated world; `record` and `stream` refuse a hidden
+tab (it paints no frames). Making background tabs take input would need an engine change (for example keeping CLI
+tabs visible to the renderer, as a capture does).
+
+### What the page can see
+
+`ardia browse` doesn't change the page's main world by default: locating, snapshots (`Accessibility.getFullAXTree`,
+cursor-interactive elements found by computed style), `get`, `is`, `find`, `read`, `storage`, `select`, `pushstate`,
+`vitals` (`PerformanceObserver` with buffered entries) and `a11y` (axe-core, `iframes: false`) run in an isolated
+world (`Page.createIsolatedWorld`, `ardia-browse`) or through browser-side CDP. `--annotate` lists and labels only the refs whose boxes fall inside the
+captured image (agent-browser 0.35.1 prints every ref on the page in its legend; ardia browse lists only what the
+image shows), and draws its labels on the
+PNG in Python, so nothing is added to the page. The page still sees what a person causes: trusted input events,
+focus, scrolling, and the DOM changes those lead to (`select` and `pushstate` dispatch their `input`/`change` and
+`popstate` events from the isolated world). Only `eval`, `wait --fn`, init scripts and the React hook run in the
+main world. `wait --fn` is the caller's JavaScript like `eval`, so it runs where the page's own globals are; it's
+evaluated every 100 ms until it's truthy. There's no `--enable-automation` and no fingerprint spoofing.
+
+The one deviation from agent-browser: the Runtime domain stays off until console or error capture starts (the first
+`console` or `errors`, or `open --capture-console`); from then on it's on for that tab for the rest of the session.
+`tests/fixtures/browse/probe.html` records `navigator.webdriver`, new window globals, DOM mutations, and the extra
+getter reads `Runtime.enable` adds to console arguments (this engine already stringifies each console argument once
+without DevTools, so the classic `Error.stack` bait reads positive on every page; the probe counts the reads beyond
+that), plus every mouse and key event. The end-to-end test asserts none after open, snapshot, click, fill, get and
+screenshot, that the detector does fire once `console` turns Runtime on, and that input was humanized (several
+`mousemove`s before `mousedown`, presses over 20 ms, one `keydown`/`keyup` per character with varying gaps, exact
+final value).
+
+### Ardia etiquette
+
+`open` without a session tab opens a new background tab in the sidebar (`Target.createTarget` at `about:blank`,
+init scripts registered, then `Page.navigate`); later `open`s navigate the session's tab. The user's tabs are only
+acted on after `tab <id>` or `tab active` (the page `/ardia/active?token=SESSION` names: the one shown in the
+session's profile, token path only; a 404 there exits 6).
+`close` and `tab close` close only tabs this session opened; the guard refuses `Browser.close` on every socket, as in
+`exec`. `tab list` shows the user's tabs too (minus prewarmed `about:blank` pages); on the token path the gateway shows only
+the session profile's tabs, and refuses anything outside that profile with `ardia: … is outside this session's
+profile` (exit 1). `alert` and `beforeunload`
+dialogs are accepted, as in agent-browser, unless `--no-auto-dialog`. `get cdp-url` refuses any URL that carries a
+token or other credentials, however it was chosen (the token path, `--ws`, `$ARDIA_CDP_URL`); it prints only a
+plain `--port`/`--ws` URL. After `frame <iframe>`, if that iframe goes away, commands fail with `frame_gone` until
+`frame main` or another `frame`, instead of falling back to the main document.
+
+### Gated by the token policy
+
+The engine's ardia-command policy (`ac_cli_token_policy_methods.cc`), behind the gateway, refuses these methods, so on the real connection
+these commands fail with exit 1, naming the method and the command (`code: "policy_refused"`, `data.method`). Each is
+implemented and works against a plain `--port` test server, so allowing the method is the only change needed.
+
+| Command | Needs |
+| --- | --- |
+| `cookies get\|set\|clear`, `cookies set --curl` | `Network.getCookies`, `Network.setCookie`, `Network.clearBrowserCookies` |
+| `state save\|load` | `Network.getAllCookies`, `Network.setCookies` |
+| `set viewport\|device\|geo\|media` | `Emulation.setDeviceMetricsOverride`, `Emulation.setTouchEmulationEnabled`, `Emulation.setUserAgentOverride`, `Emulation.setGeolocationOverride`, `Emulation.setEmulatedMedia` |
+| `set offline`, `set headers` | `Network.emulateNetworkConditions`, `Network.setExtraHTTPHeaders` |
+| `set credentials`, `network route\|unroute` | `Fetch.enable` (and `Fetch.fulfillRequest`, `failRequest`, `continueRequest`) |
+| `upload` | `DOM.setFileInputFiles` |
+| `download <sel> <path>`, `wait --download [path]` | `Browser.setDownloadBehavior` (`wait --download` waits for the next download that starts after it; `download` clicks and saves) |
+| `highlight` | `Overlay.enable`, `Overlay.highlightNode` |
+| `clipboard copy\|paste` | `Input.dispatchKeyEvent` with the `copy`/`paste` editing commands |
+| `clipboard read\|write` | `Browser.grantPermissions` |
+| `trace start\|stop`, `profiler start\|stop` | `Tracing.start`, `Tracing.end` |
+| `record start\|stop\|restart` | `Page.startScreencast` (and ffmpeg on PATH for the WebM) |
+| `stream enable` | `Page.startScreencast` |
+| `drag` of an HTML5 draggable | `Input.setInterceptDrags` |
+
+On the token path Ardia also strips `Cookie`, `Set-Cookie` and `Authorization` from network events, so
+`network requests` and HAR files never contain them.
+
+### Skipped
+
+`connect` and `inspect` (the endpoint is Ardia's; opening DevTools on the user's tab isn't something the command
+does), `install`, `upgrade`, `doctor`, `dashboard`, `mcp`, `chat` (Ardia has no AI features), `profiles` (it never
+reads browser profiles), `confirm`/`deny` and `--action-policy`/`--confirm-actions`, iOS and Safari (`-p ios`,
+`--device`, `swipe`, `tap`), cloud providers (`-p`, `--provider`), and launch options that only mean something when
+agent-browser starts its own browser (`--headed`, `--profile`, `--executable-path`, `--extension`, `--args`,
+`--user-agent`, `--proxy`, `--proxy-bypass`, `--ignore-https-errors`, `--ca-cert`, `--allow-file-access`,
+`--hide-scrollbars`, `--webgpu`, `--engine`, `--restore*`, `--state`, `--auto-connect`, `--allowed-domains`); these
+fail with a message saying so. `--headers`, `--color-scheme` and `--download-path` are launch-time too: they point at
+`set headers`, `set media` and `download <sel> <path>`. Config files (`~/.agent-browser/config.json`, `./agent-browser.json`) and
+`AGENT_BROWSER_PLUGINS` are never read. `read <url>` fetches with Python's `urllib`, so it never touches Ardia.
+
+When the reader of its output goes away early (`ardia browse snapshot -i | head`), it stops writing and exits 141, as a
+program killed by SIGPIPE would, without a traceback.
+
+### Captures and bounds
+
+Console messages (1,000 and 16 MB), errors (500 and 16 MB) and network requests (1,000 and 32 MB per tab) are ring
+buffers that count what they drop; each record's text is cut at 64 KB, header values at 8 KB and a record's headers at
+64 KB. Response bodies are capped at 1 MB for `network request`, 2 MB each and 64 MB in all for a HAR, trace events at
+2 million, a request to the daemon at 16 MB and its answer at 256 MB. `network requests` and `har` start capturing
+at their first use (`Network.enable`).
+
+`stream enable [--port N] [--input]` (once allowed) binds 127.0.0.1 only, with its own random token in the URL (never
+the CDP token), checks `Host` and `Origin` exactly (localhost or 127.0.0.1 on its port, or no Origin; `null` is refused), takes at most
+4 clients, and is view-only unless `--input`. Messages follow agent-browser's (`status`, `frame` with `seq` and
+`metadata`, `input_mouse`, `input_keyboard`, `input_touch`).
+
+### Auth vault and plugins
+
+`auth save <name> --url <https url> [--origin <url>]... --username <u> [--password-stdin]` takes the password on
+stdin or from a no-echo prompt; `--password` is refused. It talks to Keychain only through `/usr/bin/security -i`
+with the command written to its stdin, so `ps` never shows the secret, and captures its output privately (non-ASCII
+passwords come back hex-encoded, which the metadata records). The item is a generic password, service
+`dev.ardia.browse.auth`, account `<name>`, in the login Keychain. Non-secret metadata (url, origins, username,
+selectors) is `Browse/auth/<name>.json`, 0600. Each credential is bound to https origins (http only for localhost).
+`auth login` checks the tab's committed top-level origin and the field's frame origin against them before typing,
+types per character, and stops if the page navigates, the frame's loader or origin changes, or focus leaves the
+field. The check runs after each `DOM.focus` has returned (so a page's focus handler has already run) and right
+before that character's key events; for a field in an iframe it also checks the top document's focus is on that
+frame. `tests/fixtures/browse/auth.html#steal` moves focus into a cross-origin iframe on focus; the end-to-end test
+checks no character reaches it. Any process running as the user can read items `/usr/bin/security` created (Keychain lets that tool read its
+own items without a prompt), the same boundary as `ArdiaGateway.json`. `ARDIA_BROWSE_KEYCHAIN` points it at another
+keychain file, for tests.
+
+`plugin add <npm-name[@version] | owner/repo[#ref]>` pins the exact version (`npm view`) or commit (`git ls-remote`),
+installs it with `npm install --ignore-scripts` into `Browse/plugins/<name>/`, and records it in
+`Browse/plugins/registry.json`. Plugins run only through `plugin run` or `auth login --credential-provider`, over
+agent-browser's `agent-browser.plugin.v1` protocol (one JSON request on stdin: `protocol`, `capability`, `type`,
+`request`; one reply on stdout: `protocol`, `success`, `data` or `error`), with `ARDIA_*` and `AGENT_BROWSER_*` removed
+from their environment and a 60 s limit.
+
+### Testing it
+
+`python -m unittest discover -s apps/cli/tests` runs the unit tests (`test_browse.py`). The end-to-end test needs a
+built app (never `/Applications`):
+
+```sh
+ARDIA_BROWSE_E2E_APP=<build>/Ardia.app python -m unittest apps/cli/tests/test_browse_e2e.py
+```
+
+It serves `tests/fixtures/browse` on 127.0.0.1, launches one hidden instance with a DevTools port (`ac launch
+--no-wait`) and one on the token path (`open -g -n`, `ARDIA_BACKGROUND=1`, control on in `session.json`, JS from Metro on
+`$METRO_PORT` or 8081; it runs `ardia connect Personal` and allows it through the dev harness's `acCliConnect`), both under `~/ardia-scratch/browse-impl/e2e`
+(`ARDIA_BROWSE_E2E_DIR`), runs the core loop, the probe, `--no-humanize`, the hidden-tab refusal, refs across an idle
+disconnect, the gated errors, a service worker starting mid-session, `tab active` through the session and exit 6
+without a live session, then closes its sessions and quits both. The token-path half needs Metro (`pnpm dev`).
+The a11y command needs `ardia_cli/vendor/axe.min.js`: `build.sh` adds axe-core 4.10.3 (pinned by sha256 and npm's
+sha512); from the repo it falls back to `node_modules/axe-core` in a parent folder.
 
 ## Browsing data
 
@@ -250,7 +516,7 @@ on every `/devtools/page/<id>` URL, so page sockets carry it too. The gateway sc
 profile: targets listed, attached, reported and closed there only, `Target.createTarget` answered by the app opening
 a tab in that profile, page sockets to other targets refused at the handshake.
 
-`GET /ardia/run?token=SESSION&command=NAME[&arg=<JSON>][&window=<id>]` runs a command scoped to the session's profile
+`GET /ardia/run?token=SESSION&command=NAME[&arg=<JSON>][&window=<id>][&tab=<id>]` runs a command scoped to the session's profile
 (`docs/automation.md`): `{"result":{"ok":true}}`, or `{"error","message"}` with the socket's codes (`bad_request`
 400, `unknown_command` 404, `refused` 403, `no_window` 409, `failed` 500, also when the app doesn't answer in 30 s);
 a 404 without a body is an unknown or ended session. The CLI waits up to 35 s for it.

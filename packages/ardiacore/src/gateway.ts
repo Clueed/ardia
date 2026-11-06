@@ -12,7 +12,7 @@ export type CliConnectReply = { request: string; allow: true; profile: string } 
 
 export type GatewayOpenTab = { request: string; profile: string; url: string; background: boolean };
 
-export type GatewayRun = { request: string; profile: string; command: string; arg: unknown; window: string | null };
+export type GatewayRun = { request: string; profile: string; command: string; arg: unknown; window: string | null; tab: string | null };
 
 export type GatewayRunReply = { request: string; result: unknown } | { request: string; error: { code: string; message: string } };
 

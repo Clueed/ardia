@@ -130,12 +130,12 @@ final class Gateway {
   func tabOpened(request: String, tabId: String?) {
     queue.async { [self] in
       guard let open = opens.removeValue(forKey: request) else {
-        if let tabId, let profile = lateOpens.removeValue(forKey: request) { emit("gateway.closeTab", ["tabId": tabId, "profile": profile]) }
+        if let tabId, let profile = lateOpens.removeValue(forKey: request) { onMain { [data = ["tabId": tabId, "profile": profile] as [String: Any]] in ArdiaEvents.emit("gateway.closeTab", data: data) } }
         return
       }
       guard let tabId else { return open.done(nil) }
       resolveTab(tabId, key: open.session.key, until: open.deadline) { [weak self] target in
-        if target == nil { self?.emit("gateway.closeTab", ["tabId": tabId, "profile": open.session.profileId]) }
+        if target == nil { self?.onMain { [data = ["tabId": tabId, "profile": open.session.profileId] as [String: Any]] in ArdiaEvents.emit("gateway.closeTab", data: data) } }
         open.done(target)
       }
     }
@@ -147,7 +147,7 @@ final class Gateway {
     running = false
     for session in sessions { session.end() }
     sessions = []
-    for (id, connect) in requests where connect.state == .pending { emit("gateway.connectCancel", ["request": id]) }
+    for (id, connect) in requests where connect.state == .pending { onMain { [data = ["request": id] as [String: Any]] in ArdiaEvents.emit("gateway.connectCancel", data: data) } }
     requests = [:]
     for open in opens.values { open.done(nil) }
     for answer in runs.values { answer(500, ["error": "failed", "message": "Control is off."]) }
@@ -201,7 +201,7 @@ final class Gateway {
       switch connect.state {
       case .pending where now.timeIntervalSince(connect.created) > Self.requestLifetime:
         requests[id] = nil
-        emit("gateway.connectCancel", ["request": id])
+        onMain { [data = ["request": id] as [String: Any]] in ArdiaEvents.emit("gateway.connectCancel", data: data) }
       case .allowed where now.timeIntervalSince(connect.settledAt ?? now) > Self.requestLifetime:
         requests[id] = nil
         if let session = connect.session, !session.polled { end(session) }
@@ -227,15 +227,15 @@ final class Gateway {
     let active = running && (sessions.contains { !$0.proxies.isEmpty } || !runs.isEmpty || openCount > 0)
     guard active != announcedActive else { return }
     announcedActive = active
-    emit("gateway.activity", ["active": active])
+    onMain { [data = ["active": active] as [String: Any]] in ArdiaEvents.emit("gateway.activity", data: data) }
   }
 
   private func announceSessions() {
-    emit("gateway.sessions", ["sessions": sessions.map { ["id": $0.id, "profile": $0.profileId, "agent": $0.agent] }])
+    onMain { [data = ["sessions": sessions.map { ["id": $0.id, "profile": $0.profileId, "agent": $0.agent] }] as [String: Any]] in ArdiaEvents.emit("gateway.sessions", data: data) }
   }
 
-  private func emit(_ name: String, _ data: [String: Any]) {
-    DispatchQueue.main.async { ArdiaEvents.emit(name, data: data) }
+  private func onMain(_ send: @escaping () -> Void) {
+    DispatchQueue.main.async(execute: send)
   }
 
   private func handle(_ request: GatewayRequest, _ connection: NWConnection) {
@@ -279,7 +279,7 @@ final class Gateway {
       guard let connect = requests[id] else { return reply(200, ["state": "expired"]) }
       if query["cancel"] == "1" {
         requests[id] = nil
-        if connect.state == .pending { emit("gateway.connectCancel", ["request": id]) }
+        if connect.state == .pending { onMain { [data = ["request": id] as [String: Any]] in ArdiaEvents.emit("gateway.connectCancel", data: data) } }
         if let session = connect.session, !session.polled { end(session) }
         return reply(200, [String: Any]())
       }
@@ -308,7 +308,7 @@ final class Gateway {
         return reply(409, ["error": "name-taken"])
       }
       requests[id] = GatewayConnect(agent: agent, profileId: nil, newName: name)
-      emit("gateway.connectRequest", ["request": id, "agent": agent, "new": name])
+      onMain { [data = ["request": id, "agent": agent, "new": name] as [String: Any]] in ArdiaEvents.emit("gateway.connectRequest", data: data) }
       return reply(200, ["request": id])
     }
     guard let name = GatewayNames.valid(query["profile"]) else { return reply(400, ["error": "bad-name"]) }
@@ -316,7 +316,7 @@ final class Gateway {
       return reply(404, ["error": "no-such-profile"])
     }
     requests[id] = GatewayConnect(agent: agent, profileId: profile.id, newName: nil)
-    emit("gateway.connectRequest", ["request": id, "agent": agent, "profile": profile.id])
+    onMain { [data = ["request": id, "agent": agent, "profile": profile.id] as [String: Any]] in ArdiaEvents.emit("gateway.connectRequest", data: data) }
     reply(200, ["request": id])
   }
 
@@ -347,7 +347,7 @@ final class Gateway {
       self.announceActivity()
       answer(500, ["error": "failed", "message": "Ardia didn't answer in time."])
     }
-    emit("gateway.run", ["request": id, "profile": session.profileId, "command": command, "arg": arg, "window": query["window"] ?? NSNull()])
+    onMain { [data = ["request": id, "profile": session.profileId, "command": command, "arg": arg, "window": query["window"] ?? NSNull(), "tab": query["tab"] ?? NSNull()] as [String: Any]] in ArdiaEvents.emit("gateway.run", data: data) }
   }
 
   private func rename(_ session: GatewaySession, _ raw: String?, reply: (Int, Any?) -> Void) {
@@ -355,7 +355,7 @@ final class Gateway {
     guard let name = GatewayNames.valid(raw) else { return reply(400, ["error": "bad-name"]) }
     if profiles.contains(where: { $0.id != session.profileId && GatewayNames.same($0.name, name) }) { return reply(409, ["error": "name-taken"]) }
     if let index = profiles.firstIndex(where: { $0.id == session.profileId }) { profiles[index].name = name }
-    emit("gateway.rename", ["profile": session.profileId, "name": name])
+    onMain { [data = ["profile": session.profileId, "name": name] as [String: Any]] in ArdiaEvents.emit("gateway.rename", data: data) }
     reply(200, [String: Any]())
   }
 
@@ -387,7 +387,7 @@ final class Gateway {
       open.done(nil)
       self.queue.asyncAfter(deadline: .now() + Self.requestLifetime) { self.lateOpens[id] = nil }
     }
-    emit("gateway.openTab", ["request": id, "profile": session.profileId, "url": url, "background": background])
+    onMain { [data = ["request": id, "profile": session.profileId, "url": url, "background": background] as [String: Any]] in ArdiaEvents.emit("gateway.openTab", data: data) }
     return true
   }
 

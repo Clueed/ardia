@@ -41,7 +41,7 @@ function fresh() {
 test("hello, unknown methods and malformed lines", async () => {
   fresh();
   await controlOn();
-  assert.deepEqual(call("hello").result, { app: "Ardia", version: "1.0", protocol: 1 });
+  assert.deepEqual(call("hello").result, { app: "Ardia", version: "1.0", protocol: 2 });
   const unknown = call("dance");
   assert.equal(unknown.error.code, "unknown_method");
   const bad = call(null, null, { raw: "not json" });
@@ -63,10 +63,11 @@ test("run on the socket is always refused and runs nothing", async () => {
   S().newTab(w, { url: "https://b.example/" });
   S().activate(model.viewTabIds(S(), w)[0]);
   const before = model.activeTabId(S(), w);
-  for (const params of [{ command: "setAppearance", arg: "dark" }, { command: "nextTab", window: w }, { command: "quit" }, {}]) {
+  for (const params of [{ command: "setAppearance", arg: "dark" }, { command: "nextTab", window: w }, { command: "toggleMute", tab: before }, { command: "quit" }, {}]) {
     assert.deepEqual(call("run", params).error, { code: "refused", message: "ardia run needs a session: run ardia connect, then pass --session." });
   }
   assert.notEqual(S().settings.appearance, "dark");
+  assert.notEqual(S().tabs[before].muted, true);
   assert.equal(model.activeTabId(S(), w), before);
 });
 
@@ -121,7 +122,7 @@ test("events: shapes, private windows left out, closes from the previous snapsho
   await controlOn();
   const connection = ++nextConnection;
   const from = stub.controlSocket.broadcasts.length;
-  assert.deepEqual(call("subscribe", { events: ["*"] }, { connection }).result, { ok: true });
+  assert.deepEqual(call("subscribe", { events: ["*"] }, { connection }).result, { ok: true, served: [] });
   const w = S().createWindow({ url: "https://a.example/" });
   const t = S().newTab(w, { url: "https://b.example/" });
   S().activate(t);
@@ -158,7 +159,7 @@ test("tab.navigated comes from commits only, with sameDocument for in-page chang
   fresh();
   await controlOn();
   const connection = ++nextConnection;
-  call("subscribe", { events: ["tab.navigated"] }, { connection });
+  call("subscribe", { events: ["tab.navigated"], fullUrls: true }, { connection });
   const w = S().createWindow({ url: "https://a.example/" });
   const t = model.activeTabId(S(), w);
   const from = stub.controlSocket.broadcasts.length;
@@ -201,7 +202,7 @@ test("same-document navigations in quick succession all arrive, in order", async
   fresh();
   await controlOn();
   const connection = ++nextConnection;
-  call("subscribe", { events: ["tab.navigated"] }, { connection });
+  call("subscribe", { events: ["tab.navigated"], fullUrls: true }, { connection });
   const w = S().createWindow({ url: "https://a.example/" });
   const t = model.activeTabId(S(), w);
   const from = stub.controlSocket.broadcasts.length;

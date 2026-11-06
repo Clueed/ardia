@@ -210,7 +210,7 @@ class Sessions(Base):
     def session_server(self, rename_error=None):
         def respond(path, params):
             if params.get("token") != SESSION_TOKEN:
-                return 404, {}
+                return 404, {"error": "not-found"}
             if path == "/ardia/rename" and rename_error:
                 return 409, {"error": rename_error}
             return 200, {} if path != "/ardia/active" else None
@@ -268,6 +268,106 @@ class Sessions(Base):
         self.assertNotIn(CONTROL_TOKEN, found.ws + (found.active or ""))
         self.assertEqual(found.active, f"http://127.0.0.1:{fake.port}/ardia/active?token={SESSION_TOKEN}")
         self.assertFalse(endpoint.session_gone(found))
+
+
+class Browse(Base):
+    def session_server(self):
+        def respond(path, params):
+            if params.get("token") != SESSION_TOKEN:
+                return 404, {"error": "not-found"}
+            return 200, {"targetId": "T1"} if path == "/ardia/active" else {}
+
+        return self.serve(respond)
+
+    def test_endpoint_has_the_gateway_instance(self):
+        self.session_server()
+        found = endpoint.resolve(session=SESSION_TOKEN)
+        self.assertEqual(found.instance, f"{os.getpid()}:1:/devtools/browser/abc")
+
+    def test_needs_an_ardia_session(self):
+        self.session_server()
+        for argv in (("browse", "open", "example.com"), ("browse", "--ardia-session", "short", "snapshot")):
+            with self.subTest(argv=argv):
+                status, out, err = self.run_cli(*argv)
+                self.assertEqual(status, endpoint.SESSION_EXIT)
+                self.assertIn("ardia connect", out + err)
+
+    def test_session_namespaces_are_not_ardia_sessions(self):
+        self.session_server()
+        status, _, err = self.run_cli("browse", "--session", SESSION_TOKEN[:20], "open", "example.com")
+        self.assertEqual(status, endpoint.SESSION_EXIT)
+        self.assertIn("Connect first", err)
+
+    def test_each_ardia_session_gets_its_own_daemon(self):
+        from ardia_cli.browse import client
+
+        first = client.endpoint_key(None, None, self.root, SESSION_TOKEN)
+        second = client.endpoint_key(None, None, self.root, "session-" + "t" * 40)
+        self.assertNotEqual(first[0], second[0])
+        self.assertNotIn(SESSION_TOKEN, first[0] + first[1])
+
+    def test_tab_active_follows_the_session(self):
+        import asyncio
+        import types
+
+        from ardia_cli.browse.commands import user_active_tab
+        from ardia_cli.browse.errors import SessionEnded
+
+        fake = self.session_server()
+        live = types.SimpleNamespace(endpoint=endpoint.resolve(session=SESSION_TOKEN))
+        self.assertEqual(asyncio.run(user_active_tab(live)), "T1")
+        self.assertEqual(fake.routes("/ardia/active"), [{"token": SESSION_TOKEN}])
+        ended = types.SimpleNamespace(endpoint=endpoint.resolve(session="session-" + "g" * 40))
+        with self.assertRaises(SessionEnded) as caught:
+            asyncio.run(user_active_tab(ended))
+        self.assertEqual(caught.exception.exit_code, endpoint.SESSION_EXIT)
+
+
+class CommandHooks(Base):
+    def gateway(self):
+        def respond(path, params):
+            if path != "/ardia/run" or params.get("token") != SESSION_TOKEN:
+                return 404, {}
+            if params.get("command") == "togglePin":
+                return 403, {"error": "refused", "message": "togglePin reaches beyond one profile, so a session can't run it."}
+            return 200, {"result": {"ok": True}}
+
+        return self.serve(respond)
+
+    def fire(self, command: str, event: dict) -> str:
+        import asyncio
+        import types
+
+        from ardia_cli import hooks
+
+        stream = io.StringIO()
+        service = types.SimpleNamespace(socket_path=self.root / "ArdiaControl.sock", scopes={"reload": "page", "newTab": "window"})
+        runner = hooks.CommandRunner(hooks.hook_from({"name": "h", "on": "tab.activated", "command": command}), hooks.Log(stream=stream), service)
+        asyncio.run(runner._run(event))
+        return stream.getvalue()
+
+    def test_runs_through_the_gateway_with_the_session(self):
+        fake = self.gateway()
+        os.environ["ARDIA_SESSION"] = SESSION_TOKEN
+        self.assertEqual(self.fire("reload", {"event": "tab.activated", "data": {"windowId": "2", "tabId": "9"}}), "")
+        self.assertEqual(self.fire("newTab", {"event": "tab.activated", "data": {"windowId": "2", "tabId": "9"}}), "")
+        self.assertEqual(fake.routes("/ardia/run"), [
+            {"token": SESSION_TOKEN, "command": "reload", "window": "2", "tab": "9"},
+            {"token": SESSION_TOKEN, "command": "newTab", "window": "2"},
+        ])
+
+    def test_without_a_session_nothing_runs(self):
+        fake = self.gateway()
+        logged = self.fire("reload", {"event": "tab.activated", "data": {}})
+        self.assertIn("ARDIA_SESSION", logged)
+        self.assertEqual(fake.routes("/ardia/run"), [])
+
+    def test_a_refused_command_says_why(self):
+        self.gateway()
+        os.environ["ARDIA_SESSION"] = SESSION_TOKEN
+        logged = self.fire("togglePin", {"event": "tab.activated", "data": {}})
+        self.assertIn("a session can't run it", logged)
+        self.assertNotIn(SESSION_TOKEN, logged)
 
 
 class Redaction(Base):

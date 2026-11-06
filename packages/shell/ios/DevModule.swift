@@ -57,7 +57,7 @@ public class DevModule: Module {
       post(0)
     }.runOnQueue(.main)
 
-    AsyncFunction("devMenuItems") { (title: String, perform: [String]?) -> [[String: Any]] in
+    AsyncFunction("devMenuItems") { (title: String, perform: [String]?, asTitleBar: Bool?) -> [[String: Any]] in
       var tiling: NSMenu?
       var flags: [String: Any] = [:]
       if title.hasPrefix("tiling:"), let window = WindowManager.shared.window(String(title.dropFirst(7))) {
@@ -93,7 +93,9 @@ public class DevModule: Module {
       if let perform, !perform.isEmpty {
         for (i, step) in perform.enumerated() {
           guard let index = menu.items.firstIndex(where: { $0.title == step && (i == perform.count - 1 || $0.submenu != nil) }) else { return [["error": "no \(step)"]] }
-          if i == perform.count - 1 { menu.performActionForItem(at: index) } else if let sub = menu.items[index].submenu { menu = sub }
+          if i < perform.count - 1, let sub = menu.items[index].submenu { menu = sub; continue }
+          let item = menu.items[index]
+          if asTitleBar == true, let action = item.action { NSApp.sendAction(action, to: item.target, from: item) } else { menu.performActionForItem(at: index) }
         }
       }
       return flags.isEmpty ? listed : [flags] + listed
@@ -120,6 +122,7 @@ public class DevModule: Module {
     }
 
     AsyncFunction("devURLDelivery") { () -> [String: Any] in DevModule.urlDelivery }.runOnQueue(.main)
+    AsyncFunction("devOpenURLDeliveries") { () -> [[String: Any]] in OpenURLInbox.testDeliveries }.runOnQueue(.main)
 
     AsyncFunction("devShortcutRecording") { () -> Bool in ShortcutRecorder.shared.isRecording }.runOnQueue(.main)
 

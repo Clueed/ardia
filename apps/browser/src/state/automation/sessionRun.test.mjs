@@ -43,7 +43,7 @@ test("tab commands need a window showing the session's profile", () => {
   assert.equal(code(plan(agent, { command: "nextTab", window: w })), "no_window");
   assert.equal(code(plan(work, { command: "closeTab" })), "no_window");
   const ok = plan("default", { command: "nextTab" });
-  assert.deepEqual(ok, { command: "nextTab", arg: null, windowId: w, profileId: "default" });
+  assert.deepEqual(ok, { command: "nextTab", arg: null, windowId: w, tabId: null, profileId: "default" });
 });
 
 test("an agent's tab commands act only once its tab shows, and only on its tabs", () => {
@@ -76,9 +76,9 @@ test("a gateway run answers through runReply", async () => {
   const { w } = setup();
   startSessionRuns();
   stub.gatewayRunReplies.length = 0;
-  stub.emitEvent("gateway.run", { request: "r1", profile: "default", command: "nextTab", arg: null, window: null });
-  stub.emitEvent("gateway.run", { request: "r2", profile: "default", command: "setAppearance", arg: "dark", window: null });
-  stub.emitEvent("gateway.run", { request: "r3", profile: "default", command: "nextTab", arg: null, window: "nope" });
+  stub.emitEvent("gateway.run", { request: "r1", profile: "default", command: "nextTab", arg: null, window: null, tab: null });
+  stub.emitEvent("gateway.run", { request: "r2", profile: "default", command: "setAppearance", arg: "dark", window: null, tab: null });
+  stub.emitEvent("gateway.run", { request: "r3", profile: "default", command: "nextTab", arg: null, window: "nope", tab: null });
   for (let i = 0; i < 10 && stub.gatewayRunReplies.length < 3; i++) await new Promise((r) => setTimeout(r, 0));
   assert.deepEqual(stub.gatewayRunReplies.map((r) => [r.request, r.result ?? r.error.code]), [
     ["r1", { ok: true }],
@@ -87,4 +87,66 @@ test("a gateway run answers through runReply", async () => {
   ]);
   assert.notEqual(S().settings.appearance, "dark");
   assert.ok(w);
+});
+
+test("a tab target in the session's profile runs without focusing it; any other tab is no_window", () => {
+  const { agent, work, w } = setup();
+  const shown = model.activeTabId(S(), w);
+  const mine = S().newTab(w, { url: "https://agent.example/1", profileId: agent, background: true });
+  const ready = plan(agent, { command: "toggleMute", tab: mine });
+  assert.deepEqual(ready, { command: "toggleMute", arg: null, windowId: w, tabId: mine, profileId: agent });
+  assert.deepEqual(runSessionCommand(ready), { result: { ok: true } });
+  assert.equal(S().tabs[mine].muted, true);
+  assert.equal(model.activeTabId(S(), w), shown);
+  assert.equal(code(plan(agent, { command: "toggleMute", tab: shown })), "no_window");
+  assert.equal(code(plan(work, { command: "toggleMute", tab: mine })), "no_window");
+  assert.equal(code(plan(agent, { command: "toggleMute", tab: "nope" })), "no_window");
+  assert.equal(code(plan(agent, { command: "toggleMute", tab: 7 })), "no_window");
+  assert.equal(code(plan(agent, { command: "toggleMute", tab: mine, window: "nope" })), "no_window");
+  assert.equal(code(plan(agent, { command: "newTab", tab: mine })), "bad_request");
+  assert.equal(code(plan(agent, { command: "nextTab", tab: mine })), "bad_request");
+  assert.equal(code(plan(agent, { command: "setAppearance", tab: mine })), "refused");
+  const priv = S().createWindow({ kind: "private", url: "https://secret.example/" });
+  assert.equal(code(plan("default", { command: "toggleMute", tab: model.activeTabId(S(), priv) })), "no_window");
+  S().closeTab(mine);
+  assert.equal(code(plan(agent, { command: "toggleMute", tab: mine })), "no_window");
+});
+
+test("a tab target runs before Peek and the command panel; a Peek tab is no_window", () => {
+  const { w } = setup();
+  const shown = model.activeTabId(S(), w);
+  const background = S().newTab(w, { url: "https://b.example/", background: true });
+  const peek = S().openPeek(shown, "https://peek.example/");
+  S().openPanel(w, "");
+  assert.deepEqual(runSessionCommand(plan("default", { command: "closeTab", tab: background })), { result: { ok: true } });
+  assert.equal(S().tabs[background], undefined);
+  assert.equal(S().peeks[w]?.tabId, peek);
+  assert.equal(S().windowUi[w].panel.open, true);
+  assert.equal(code(plan("default", { command: "closeTab", tab: background })), "no_window");
+  assert.equal(code(plan("default", { command: "closeTab", tab: peek })), "no_window");
+});
+
+test("a Little Ardia tab takes its page commands and closeTab, not tab moves", () => {
+  setup();
+  const little = S().createWindow({ kind: "small", url: "https://l.example/" });
+  const tab = model.activeTabId(S(), little);
+  assert.equal(code(plan("default", { command: "duplicateTab", tab })), "bad_request");
+  assert.equal(code(plan("default", { command: "moveTabUp", tab })), "bad_request");
+  assert.deepEqual(runSessionCommand(plan("default", { command: "reload", tab })), { result: { ok: true } });
+  assert.deepEqual(plan("default", { command: "closeTab", tab }), { command: "closeTab", arg: null, windowId: little, tabId: tab, profileId: "default" });
+});
+
+test("a gateway run passes its tab through", async () => {
+  const { agent, w } = setup();
+  const mine = S().newTab(w, { url: "https://agent.example/1", profileId: agent, background: true });
+  startSessionRuns();
+  stub.gatewayRunReplies.length = 0;
+  stub.emitEvent("gateway.run", { request: "t1", profile: agent, command: "toggleMute", arg: null, window: null, tab: mine });
+  stub.emitEvent("gateway.run", { request: "t2", profile: "default", command: "toggleMute", arg: null, window: null, tab: mine });
+  for (let i = 0; i < 10 && stub.gatewayRunReplies.length < 2; i++) await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(stub.gatewayRunReplies.map((r) => [r.request, r.result ?? r.error.code]), [
+    ["t1", { ok: true }],
+    ["t2", "no_window"],
+  ]);
+  assert.equal(S().tabs[mine].muted, true);
 });

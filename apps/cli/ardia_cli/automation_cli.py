@@ -12,9 +12,9 @@ from ardia_cli.control import MethodError, Unreachable
 DATA_DIR_HELP = "the Ardia data dir (default: $ARDIA_DATA_DIR, else the installed app's)"
 RUN_DESCRIPTION = """\
 Run one of Ardia's commands, exactly as its menu item or shortcut would, in the last focused window or --window,
-scoped to the session's profile. ARG is one of the command's variants (ardia commands lists them); COMMAND:ARG
-works too. It needs a session from ardia connect (--session ID or $ARDIA_SESSION); commands that can't be kept to
-that profile are refused.
+scoped to the session's profile. --tab picks the tab for commands that act on a page, without changing focus. ARG
+is one of the command's variants (ardia commands lists them); COMMAND:ARG works too. It needs a session from
+ardia connect (--session ID or $ARDIA_SESSION); commands that can't be kept to that profile are refused.
 
 Exit status: 0 dispatched, 1 refused, unknown or no such window, 2 Ardia can't be reached (or the connection
 dropped after the request went out, so the command may or may not have run), 6 no session or it has ended.
@@ -23,18 +23,23 @@ Examples:
   ardia run newTab --session ID
   ardia run selectTab 3 --session ID
   ardia run toggleSidebar --window 2 --session ID
+  ardia run reload --tab 14 --session ID
 """
 EVENTS_DESCRIPTION = f"""\
 Print Ardia's events as they happen, until interrupted. EVENT is one of:
   {", ".join(control.EVENTS)}
-(default: all of them). --json prints each event's raw JSON line.
+(default: all of them, except {", ".join(control.NAMED_ONLY_EVENTS)}, which come only when named).
+URLs come without their query and fragment unless --full-urls. tab.idle, tab.resumed, user.idle and user.active
+need --idle. --json prints each event's raw JSON line.
 
 Exit status: 1 an unknown event, 2 Ardia can't be reached or the connection dropped, 130 interrupted.
 """
 ON_DESCRIPTION = """\
 Run PROGRAM for each matching event, until interrupted. The event's JSON line is PROGRAM's stdin; its environment
 has ARDIA_EVENT, ARDIA_WINDOW_ID, ARDIA_TAB_ID, ARDIA_PROFILE, ARDIA_URL and ARDIA_TITLE (set or removed for every
-run). PROGRAM runs directly, never through a shell unless PROGRAM is one; a leading ~ is expanded.
+run; never a notification's text). PROGRAM runs directly, never through a shell unless PROGRAM is one; a leading ~
+is expanded. URLs come without their query and fragment unless --full-urls. tab.idle, tab.resumed, user.idle and
+user.active need --idle (like 30m, at least 1m).
 
 --match takes userscript match patterns (https://*.example.com/*); any of them may match, and events without a URL
 never match. One run at a time, at most 100 events waiting (the oldest are dropped, with a warning). A run is
@@ -44,6 +49,7 @@ off it reconnects with backoff.
 Examples:
   ardia on tab.navigated --match 'https://*.youtube.com/*' -- ~/bin/yt-hook
   ardia on tab.opened,tab.closed -- /bin/sh -c 'echo "$ARDIA_EVENT $ARDIA_URL" >> ~/tabs.log'
+  ardia on tab.idle --idle 30m -- ~/bin/park-tab
 """
 HOOKS_DESCRIPTION = """\
 Run hooks from hooks.json in the config folder (~/.config/ardia, or <data dir>/config with --data-dir or
@@ -52,12 +58,22 @@ $ARDIA_DATA_DIR) in one process:
   {
     "hooks": [
       { "name": "yt-to-media", "on": ["tab.navigated"], "match": ["https://*.youtube.com/*"],
-        "run": ["~/bin/yt-hook"], "timeout": 30 }
+        "run": ["~/bin/yt-hook"], "timeout": 30, "fullUrls": true },
+      { "name": "fresh-tab", "on": "app.launched", "command": "newTab" },
+      { "name": "standup", "at": "09:55", "days": ["mon", "tue", "wed", "thu", "fri"], "run": ["~/bin/standup"] },
+      { "name": "old-reddit", "on": "tab.opening", "rewrite": [{ "match": "https://www.reddit.com/*", "to": "https://old.reddit.com{path}{query}" }] },
+      { "name": "jira", "omnibox": { "title": "Jira", "keyword": "j" }, "run": ["~/bin/jira-suggest"] }
     ]
   }
 
-Each hook runs like ardia on (see ardia on --help). run re-reads hooks.json when it changes; an invalid file keeps
-the hooks loaded before. Output goes to ~/Library/Logs/Ardia/hooks.log (rotated at 5 MB).
+A hook has one trigger (on, at, every or omnibox) and one action (run, command, or a decide answer). Event hooks
+run like ardia on (see ardia on --help); command hooks run an Ardia command in the event's window and tab through
+the gateway with $ARDIA_SESSION (a session from ardia connect; without one they log why and don't run); decide
+hooks (tab.opening, link.opening, download.deciding, permission.requested) answer before Ardia acts, as rules
+Ardia applies itself or as a program whose stdout is the answer; scheduled hooks get a schedule.fired event.
+Rules that route or rewrite links, pick folders, run decide programs or read the address bar wait for approval in
+Ardia's Settings › Advanced › Automation. run re-reads hooks.json when it changes; an invalid file keeps the hooks
+loaded before. Output goes to ~/Library/Logs/Ardia/hooks.log (rotated at 5 MB). See docs/automation.md.
 
 Commands:
   run         run the hooks until interrupted
@@ -76,6 +92,7 @@ def add_parsers(commands, formatter):
     run.add_argument("command_id", metavar="COMMAND", help="a command id (see ardia commands)")
     run.add_argument("arg", nargs="?", metavar="ARG", help="one of the command's variants")
     run.add_argument("--window", metavar="ID", help="a window id from ardia windows (default: the last focused window)")
+    run.add_argument("--tab", metavar="ID", help="a tab id from ardia windows, for commands that act on a page; never changes focus")
     run.add_argument("--json", action="store_true", help="print the reply as JSON")
     run.add_argument("--session", metavar="ID", help="the session from ardia connect (default: $ARDIA_SESSION)")
 
@@ -88,11 +105,15 @@ def add_parsers(commands, formatter):
     events = data_dir(commands.add_parser("events", help="print events as they happen", description=EVENTS_DESCRIPTION, formatter_class=formatter))
     events.add_argument("events", nargs="*", metavar="EVENT", help="event names (default: all)")
     events.add_argument("--json", action="store_true", help="print the raw JSON lines")
+    events.add_argument("--full-urls", action="store_true", help="keep each URL's query and fragment")
+    events.add_argument("--idle", metavar="DURATION", help="the threshold for tab.idle, tab.resumed, user.idle and user.active, like 30m")
 
-    on = data_dir(commands.add_parser("on", help="run a program for each event", description=ON_DESCRIPTION, formatter_class=formatter, usage="ardia on [-h] [--data-dir DIR] [--match PATTERN] [--timeout S] EVENT[,EVENT...] -- PROGRAM [ARGS...]"))
+    on = data_dir(commands.add_parser("on", help="run a program for each event", description=ON_DESCRIPTION, formatter_class=formatter, usage="ardia on [-h] [--data-dir DIR] [--match PATTERN] [--timeout S] [--idle DURATION] [--full-urls] EVENT[,EVENT...] -- PROGRAM [ARGS...]"))
     on.add_argument("events", metavar="EVENT[,EVENT...]", help="event names, comma-separated")
     on.add_argument("--match", action="append", default=[], metavar="PATTERN", help="a match pattern for the event's URL; repeat for several")
     on.add_argument("--timeout", type=float, default=hooks.DEFAULT_TIMEOUT, metavar="S", help="stop a run after this many seconds (default 60)")
+    on.add_argument("--idle", metavar="DURATION", help="the threshold for tab.idle, tab.resumed, user.idle and user.active, like 30m")
+    on.add_argument("--full-urls", action="store_true", help="keep each URL's query and fragment")
 
     group = commands.add_parser("hooks", help="run hooks from hooks.json, at login if you like", description=HOOKS_DESCRIPTION, formatter_class=formatter)
     sub = group.add_subparsers(dest="hooks_command", metavar="<command>")
@@ -174,7 +195,7 @@ def cmd_run(args) -> int:
     try:
         session = require_session(args.session)
         gateway = require_control(data_root(args.data_dir))
-        result = run_command(gateway, session, command, arg, args.window)
+        result = run_command(gateway, session, command, arg, args.window, args.tab)
     except SessionError as error:
         complain(f"ardia run: {error}")
         return SESSION_EXIT
@@ -213,6 +234,15 @@ def run_hint(args, code: str, command: str, arg) -> str:
     from ardia_cli.schema_check import did_you_mean
 
     return did_you_mean(arg, variants)
+
+
+def idle_seconds(text: str | None) -> int | None:
+    if text is None:
+        return None
+    seconds = hooks.parse_duration(text)
+    if seconds is None or seconds < hooks.MIN_IDLE:
+        raise ValueError(f"--idle {text}: give a duration like 30m, at least 1m")
+    return seconds
 
 
 def parse_id(text: str):
@@ -294,12 +324,18 @@ def describe_event(event: dict) -> str:
 def cmd_events(args) -> int:
     try:
         names = control.check_events(args.events) or ["*"]
+        idle = idle_seconds(args.idle)
     except ValueError as error:
         complain(f"ardia events: {error}")
         return 1
+    extra = {}
+    if args.full_urls:
+        extra["fullUrls"] = True
+    if idle is not None:
+        extra["idle"] = {"tab": [idle], "user": [idle]}
 
     async def work(connection):
-        await connection.subscribe(names)
+        await connection.subscribe(names, extra)
         while True:
             event, raw = await connection.next_line()
             behind = connection.take_dropped()
@@ -328,7 +364,7 @@ def cmd_on(args) -> int:
         complain("ardia on: give the program after --, like: ardia on tab.opened -- ~/bin/hook")
         return 1
     try:
-        hook = hooks.make_hook("on", [e for e in args.events.split(",") if e], args.match, program, args.timeout)
+        hook = hooks.make_hook("on", [e for e in args.events.split(",") if e], args.match, program, args.timeout, idle=idle_seconds(args.idle), full_urls=args.full_urls)
     except ValueError as error:
         complain(f"ardia on: {error}")
         return 1
@@ -382,7 +418,7 @@ def hooks_run(args) -> int:
     holder = {}
 
     async def main():
-        service = hooks.Service(socket_for(args), log, capture=True)
+        service = hooks.Service(socket_for(args), log, capture=True, state_path=socket_for(args).parent / hooks.LAUNCH_STATE)
         holder["service"] = service
         log.write(f"ardia hooks run: watching {path}")
         try:
@@ -477,7 +513,7 @@ def hooks_list(args, launchctl=None) -> int:
         return 1 if problem and os.path.lexists(path) else 0
     for hook in found:
         match = f"  match {' '.join(hook.patterns)}" if hook.patterns else ""
-        say(f"{hook.name}  on {','.join(hook.events)}{match}  run {' '.join(hook.program)}  timeout {hook.timeout:g}s")
+        say(f"{hook.name}  [{hook.kind()}]  {hook.trigger()}{match}  {hook.action()}")
     if problem:
         complain(f"ardia hooks: {problem}")
     if not installed:

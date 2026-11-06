@@ -58,6 +58,7 @@ class Endpoint:
     explicit: bool
     active: str | None = None
     session: str | None = None
+    instance: str | None = None
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,12 @@ class Control:
     port: int
     browser: str
     token: str
+    pid: int = 0
+    generation: int = 0
+
+    @property
+    def instance(self) -> str:
+        return f"{self.pid}:{self.generation}:{self.browser}"
 
     def url(self, route: str, **params) -> str:
         return f"http://127.0.0.1:{self.port}/ardia/{route}?{query(**params)}"
@@ -127,7 +134,7 @@ def _from_ws(url: str, source: str) -> Endpoint:
         raise EndpointError(f"{source} must be a ws://host:port/devtools/browser/<id> URL")
     for token in parse_qs(parts.query).get("token", []):
         add_secret(token)
-    return Endpoint(url, source, True)
+    return Endpoint(url, source, True, instance=f"{parts.netloc}{parts.path}")
 
 
 def _from_port(port: int) -> Endpoint:
@@ -156,7 +163,7 @@ def from_control_file(path: Path, session: str | None) -> Endpoint:
     control = read_control(path)
     if session is None:
         raise SessionError(NO_SESSION)
-    return Endpoint(f"ws://127.0.0.1:{control.port}{control.browser}?{query(token=session)}", str(path), False, control.url("active", token=session), session)
+    return Endpoint(f"ws://127.0.0.1:{control.port}{control.browser}?{query(token=session)}", str(path), False, control.url("active", token=session), session, control.instance)
 
 
 def read_control(path: Path) -> Control:
@@ -188,6 +195,7 @@ def read_control(path: Path) -> Control:
     browser = control.get("browser")
     token = control.get("token")
     pid = control.get("pid")
+    generation = control.get("generation")
     if not (isinstance(port, int) and 0 < port < 65536):
         raise EndpointError(f"{NOT_REACHABLE} ({path.name} has no valid port)")
     if not (isinstance(browser, str) and _BROWSER_PATH.match(browser)):
@@ -197,7 +205,7 @@ def read_control(path: Path) -> Control:
     add_secret(token)
     if not (isinstance(pid, int) and pid > 1 and _alive(pid)):
         raise EndpointError(NOT_REACHABLE)
-    return Control(port, browser, token)
+    return Control(port, browser, token, pid, generation if isinstance(generation, int) else 0)
 
 
 def get_json(url: str, timeout: float = ROUTE_TIMEOUT):
@@ -237,7 +245,7 @@ def control_call(control: Control, route: str, **params) -> dict:
     try:
         answer = get_json(control.url(route, token=control.token, **params))
     except RouteError as error:
-        if error.code == "http-404":
+        if unknown_session(error):
             raise EndpointError(NOT_REACHABLE) from None
         raise
     if not isinstance(answer, dict):
@@ -245,11 +253,15 @@ def control_call(control: Control, route: str, **params) -> dict:
     return answer
 
 
+def unknown_session(error: RouteError) -> bool:
+    return error.code in ("http-404", "not-found")
+
+
 def session_call(control: Control, session: str, route: str, **params):
     try:
         return get_json(control.url(route, token=session, **params))
     except RouteError as error:
-        if error.code == "http-404":
+        if unknown_session(error):
             raise SessionError(SESSION_ENDED) from None
         raise
 
@@ -257,16 +269,18 @@ def session_call(control: Control, session: str, route: str, **params):
 RUN_TIMEOUT = 35
 
 
-def run_command(control: Control, session: str, command: str, arg=None, window=None):
+def run_command(control: Control, session: str, command: str, arg=None, window=None, tab=None):
     params = {"command": command}
     if arg is not None:
         params["arg"] = json.dumps(arg, ensure_ascii=False, separators=(",", ":"))
     if window is not None:
         params["window"] = window
+    if tab is not None:
+        params["tab"] = tab
     try:
         answer = get_json(control.url("run", token=session, **params), timeout=RUN_TIMEOUT)
     except RouteError as error:
-        if error.code == "http-404":
+        if unknown_session(error):
             raise SessionError(SESSION_ENDED) from None
         raise
     return answer.get("result") if isinstance(answer, dict) else None
@@ -278,7 +292,7 @@ def session_gone(endpoint: Endpoint) -> bool:
     try:
         get_json(endpoint.active, timeout=2)
     except RouteError as error:
-        return error.code == "http-404"
+        return unknown_session(error)
     except EndpointError:
         return False
     return False

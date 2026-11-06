@@ -14,7 +14,7 @@ import { registerRow } from "../../state/sidebar/sidebarUi";
 import { usePageStyle } from "../../state/windows/profilePager";
 import { DragScope } from "./DragProvider";
 import { Fold, useFold, type FoldEntry } from "./Fold";
-import { GROUP_BORDER, GROUP_HEADER_RADIUS, LIVE_FOLDER_PAD, GROUP_RADIUS } from "./geometry";
+import { GROUP_BORDER, GROUP_INNER_RADIUS, LIVE_FOLDER_PAD, GROUP_RADIUS } from "./geometry";
 import { NoteRow } from "./LiveFolderRows";
 import { listTopInset } from "./pageLayout";
 import { useAddressBarInSidebar } from "../../state/windows/layout";
@@ -106,7 +106,7 @@ function AgentFolderHeader({ profileId, windowId, open, count, collapsed }: { pr
           {({ pressed }) => (
             <SidebarRowSurface
               fill={pressed ? theme.tabPressed : hovered ? tokens.groupHeaderHover : ink.clear}
-              cornerRadius={GROUP_HEADER_RADIUS}
+              cornerRadius={GROUP_INNER_RADIUS}
               padLeft={TAB_ROW.contentLeft + LIVE_FOLDER_PAD}
               padRight={TAB_ROW.trailing + LIVE_FOLDER_PAD}
             >

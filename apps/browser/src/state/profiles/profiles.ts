@@ -2,6 +2,7 @@ import type { StateCreator } from "zustand";
 import type { BrowserState } from "../browser/store";
 import { engineBookmarkRoots, ensureRoots, removeBookmarkTree } from "../bookmarks/bookmarks";
 import { engineProfile, incognitoOriginal, newId, viewTabIds, without } from "../browser/model";
+import { handPagesOutOfProfile } from "../pins/pinShare";
 import { DEFAULT_PROFILE_ID } from "../settings/settings";
 import { activated, apply, removeTabs, withNewTab } from "../tabs/tabs";
 import type { Profile, ProfileColor } from "../browser/types";
@@ -12,8 +13,8 @@ export type ProfilesSlice = {
   profileOrder: string[];
   orphanedProfileData: string[];
 
-  createProfile(options: { name: string; color?: ProfileColor; icon?: string | null; shareWith?: string | null; kind?: "agent" }): string;
-  updateProfile(id: string, patch: Partial<Pick<Profile, "name" | "icon" | "pinnedCollapsed">>): void;
+  createProfile(options: { name: string; color?: ProfileColor; icon?: string | null; shareWith?: string | null; ownTopApps?: boolean; kind?: "agent" }): string;
+  updateProfile(id: string, patch: Partial<Pick<Profile, "name" | "icon" | "pinnedCollapsed" | "ownTopApps">>): void;
   setProfileLook(id: string, look: Partial<Pick<Profile, "color" | "theme">>): void;
   deleteProfile(id: string): void;
   reorderProfiles(ids: string[]): void;
@@ -28,7 +29,7 @@ const COLORS: ProfileColor[] = ["blue", "green", "orange", "purple", "red", "yel
 export const unusedProfileColor = (profiles: Record<string, Profile>): ProfileColor =>
   COLORS.find((c) => !Object.values(profiles).some((p) => p.color === c)) ?? "blue";
 
-const dataIdOf = (profile: Profile) => profile.dataId ?? profile.id;
+export const dataIdOf = (profile: Pick<Profile, "id" | "dataId">) => profile.dataId ?? profile.id;
 
 export function dataGroups(s: Pick<BrowserState, "profiles" | "profileOrder">): { dataId: string; profileIds: string[] }[] {
   const groups = new Map<string, string[]>();
@@ -53,7 +54,7 @@ export const createProfilesSlice: StateCreator<BrowserState, [], [], ProfilesSli
     profileOrder: [DEFAULT_PROFILE.id],
     orphanedProfileData: [],
 
-    createProfile({ name, color, icon = null, shareWith, kind }) {
+    createProfile({ name, color, icon = null, shareWith, ownTopApps, kind }) {
       const s = get();
       const agent = kind === "agent";
       const source = shareWith && !agent ? s.profiles[shareWith] : undefined;
@@ -65,6 +66,7 @@ export const createProfilesSlice: StateCreator<BrowserState, [], [], ProfilesSli
         createdAt: Date.now(),
         ...(source ? { dataId: dataIdOf(source) } : {}),
         ...(agent ? { kind } : {}),
+        ...(ownTopApps ? { ownTopApps } : {}),
       };
       const profiles = { ...s.profiles, [profile.id]: profile };
       const bookmarks = agent ? s.bookmarks : ensureRoots(s.bookmarks, engineProfile({ profiles }, profile.id))[0];
@@ -84,7 +86,7 @@ export const createProfilesSlice: StateCreator<BrowserState, [], [], ProfilesSli
       const agent = isAgent(get().profiles[id]);
       if (!get().profiles[id] || (!agent && get().profileOrder.length <= 1)) return;
       for (const w of Object.values(get().windows)) if (w.kind === "private" && incognitoOriginal(w.profileId) === id) get().closeWindow(w.id);
-      let s = get();
+      let s = handPagesOutOfProfile(get(), id);
       const profileOrder = s.profileOrder.filter((p) => p !== id);
       const fallback = s.settings.defaultProfileId === id ? profileOrder[0]! : s.settings.defaultProfileId;
       const settings = {

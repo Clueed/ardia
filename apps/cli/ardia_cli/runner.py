@@ -226,7 +226,7 @@ class Session:
             pass
 
 
-def run_through_gateway(endpoint: Endpoint, data_root, session_id, command, arg, window):
+def run_through_gateway(endpoint: Endpoint, data_root, session_id, command, arg, window, tab=None):
     from ardia_cli import control
     from ardia_cli.endpoint import RouteError, RouteLost, require_control, require_session, run_command
 
@@ -234,7 +234,7 @@ def run_through_gateway(endpoint: Endpoint, data_root, session_id, command, arg,
         raise control.Unreachable("run() needs --data-dir or $ARDIA_DATA_DIR when --port, --ws or $ARDIA_CDP_URL picks the browser")
     token = endpoint.session or require_session(session_id)
     try:
-        return run_command(require_control(data_root), token, command, arg, window)
+        return run_command(require_control(data_root), token, command, arg, window, tab)
     except RouteError as error:
         raise control.MethodError(error.code, error.message) from None
     except RouteLost as error:
@@ -300,8 +300,8 @@ def build_namespace(session: Session, filename: str, data_root=None, session_id:
 
     from ardia_cli import control
 
-    async def run(command: str, arg: str | None = None, window=None):
-        return await asyncio.to_thread(run_through_gateway, session.endpoint, data_root, session_id, command, arg, window)
+    async def run(command: str, arg: str | None = None, window=None, tab=None):
+        return await asyncio.to_thread(run_through_gateway, session.endpoint, data_root, session_id, command, arg, window, tab)
 
     async def windows():
         connection = await control.open_control(data_root)
@@ -310,11 +310,11 @@ def build_namespace(session: Session, filename: str, data_root=None, session_id:
         finally:
             await connection.close()
 
-    async def events(*names: str):
+    async def events(*names: str, full_urls: bool = False):
         wanted = control.check_events(names) or ["*"]
         connection = await control.open_control(data_root)
         try:
-            await connection.subscribe(wanted)
+            await connection.subscribe(wanted, {"fullUrls": True} if full_urls else None)
             while True:
                 yield await connection.next_event()
         finally:

@@ -7,7 +7,7 @@ Control a running Ardia from the terminal.
 
 Connect first: ardia connect --new NAME makes a profile of your own (no prompt); ardia connect NAME uses an
 existing one once the owner allows it. Either prints a session id: pass it as --session ID (or $ARDIA_SESSION)
-to exec, scripts test, rename and disconnect.
+to exec, run, scripts test, rename and disconnect, and as --ardia-session ID (or $ARDIA_SESSION) to browse.
 """
 PROFILES_DESCRIPTION = """\
 List Ardia's profiles: name, kind (real: the owner's; agent: made by ardia connect --new) and how many sessions
@@ -157,11 +157,16 @@ def build_parser():
     from ardia_cli import automation_cli
 
     automation_cli.add_parsers(commands, argparse.RawDescriptionHelpFormatter)
+    commands.add_parser("browse", help="agent-browser's commands against the running Ardia (ardia browse --help)", add_help=False)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["browse"]:
+        from ardia_cli.browse.cli import main as browse_main
+
+        return browse_main(argv[1:])
     if argv == ["--version"]:
         print(f"ardia {__version__}")
         return 0
