@@ -24,6 +24,7 @@ import { seedAgentExtensions } from "../extensions/agentExtensions";
 import { noteGatewayActive, useCli } from "./cliControl";
 import { startGatewayTabs } from "./gatewayTabs";
 import { startSessionRuns } from "../automation/sessionRun";
+import { wakeProfileTabs } from "../tabs/recentTabWarmup";
 
 export type PendingConnect = { id: string; agent: string; profileId: string; profileName: string };
 
@@ -124,8 +125,13 @@ export function answerConnect(id: string, allow: boolean) {
   quietly(replyCliConnect(allow && profile ? { request: id, allow: true, profile: pending.profileId } : { request: id, allow: false }));
 }
 
-function sessionsChanged({ sessions }: { sessions: CliSession[] }) {
-  useCliConnect.setState({ sessions: Array.isArray(sessions) ? sessions : [] });
+export function sessionsChanged({ sessions }: { sessions: CliSession[] }) {
+  const next = Array.isArray(sessions) ? sessions : [];
+  const known = new Set(useCliConnect.getState().sessions.map((x) => x.id));
+  useCliConnect.setState({ sessions: next });
+  const s = useBrowser.getState();
+  const joined = new Set(next.filter((x) => !known.has(x.id) && isAgentProfile(s, x.profile)).map((x) => x.profile));
+  for (const profile of joined) wakeProfileTabs(profile);
 }
 
 function renamed({ profile, name }: { profile: string; name: string }) {

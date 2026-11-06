@@ -29,7 +29,9 @@ the pins into `pyproject.toml`).
   `name-taken` (for `--new`, naming the existing profile as Ardia spells it) or `bad-name` (empty, over 60 characters,
   control characters), each as one plain line; 2 unreachable (also when the control token is unknown, 404); 4 denied;
   5 expired or no answer (past its own 120 s it sends `&cancel=1`); 130 Ctrl-C, 143 SIGTERM and 129 SIGHUP, each after
-  sending `&cancel=1` (2 s deadline), so a killed `connect` never leaves the owner's prompt up.
+  sending `&cancel=1` (2 s deadline), so a killed `connect` never leaves the owner's prompt up. A session on an agent
+  profile wakes that profile's sleeping tabs (the 8 most recent; Ardia restores tabs asleep), so its pages are there
+  to drive after a restart.
 - `ardia disconnect [--session ID] [--data-dir DIR]` (`/ardia/disconnect?token=SESSION`) ends the session and closes
   its sockets; prints `disconnected`.
 - `ardia rename NAME [--session ID] [--data-dir DIR]` (`/ardia/rename?token=SESSION&name=NAME`) renames the session's

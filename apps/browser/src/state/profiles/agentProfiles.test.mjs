@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 const { useBrowser } = await import("../browser/store.ts");
 const { AGENTS_PAGE, pageIdOf, ownerProfileOf, agentProfileIds } = await import("../browser/agents.ts");
-const { cliProfiles } = await import("../app/cliConnect.ts");
+const { cliProfiles, sessionsChanged, useCliConnect } = await import("../app/cliConnect.ts");
+const { PROFILE_WAKE_LIMIT, wakeProfileTabs } = await import("../tabs/recentTabWarmup.ts");
 const { extensionsProfileId } = await import("../extensions/store.ts");
 const { originalProfile } = await import("../windows/small.ts");
 const { closeGatewayTab, openGatewayTab, shownTabsByProfile } = await import("../app/gatewayTabs.ts");
@@ -143,4 +144,38 @@ test("a late gateway tab closes only when it belongs to the asking profile", () 
 test("shown tabs are the focused windows' visible tabs per profile", () => {
   const { w } = setup();
   assert.deepEqual(shownTabsByProfile(S()), { default: S().windows[w].activeTabIds.default });
+});
+
+function restoredAsleep(ids) {
+  const tabs = { ...S().tabs };
+  ids.forEach((id, i) => (tabs[id] = { ...tabs[id], page: { kind: "idle" }, lastActiveAt: 1000 + i }));
+  useBrowser.setState({ tabs });
+}
+
+test("an agent connecting wakes its profile's restored tabs, newest first, and leaves the owner's asleep", () => {
+  const { agent, w } = setup();
+  useCliConnect.setState({ requests: [], sessions: [] });
+  const agentTabs = Array.from({ length: PROFILE_WAKE_LIMIT + 2 }, (_, i) => openGatewayTab({ profile: agent, url: `https://agent.example/${i}`, background: true }));
+  const owner = S().newTab(w, { url: "https://owner.example/b", background: true });
+  restoredAsleep([...agentTabs, owner]);
+
+  sessionsChanged({ sessions: [{ id: "s1", profile: agent, agent: "claude" }] });
+
+  const woken = agentTabs.filter((id) => S().tabs[id].page.kind !== "idle");
+  assert.deepEqual(woken, agentTabs.slice(-PROFILE_WAKE_LIMIT), "the most recent ones, up to the limit");
+  assert.equal(S().tabs[owner].page.kind, "idle", "the owner's tabs stay asleep");
+
+  restoredAsleep(agentTabs);
+  sessionsChanged({ sessions: [{ id: "s1", profile: agent, agent: "claude" }] });
+  assert.ok(agentTabs.every((id) => S().tabs[id].page.kind === "idle"), "a session already known wakes nothing again");
+});
+
+test("a session on a real profile wakes nothing", () => {
+  const { w } = setup();
+  useCliConnect.setState({ requests: [], sessions: [] });
+  const owner = S().newTab(w, { url: "https://owner.example/b", background: true });
+  restoredAsleep([owner]);
+  sessionsChanged({ sessions: [{ id: "s2", profile: "default", agent: "claude" }] });
+  assert.equal(S().tabs[owner].page.kind, "idle");
+  assert.deepEqual(wakeProfileTabs("nobody"), []);
 });
