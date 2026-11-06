@@ -23,6 +23,12 @@ DEFAULT_AGENT = "agent"
 POLL_INTERVAL = 0.25
 CONNECT_WAIT = 120
 CANCEL_TIMEOUT = 2
+REFUSALS = {
+    "no-such-profile": "no profile is named {name!r}",
+    "name-taken": "a profile is already named {existing!r}: pick another name, or connect to {existing!r} to use it",
+    "bad-name": "{name!r} isn't a usable profile name (1 to 60 characters, no control characters)",
+    "not-agent": "this session is on one of the owner's profiles; only agent profiles can be renamed",
+}
 NEEDS_DATA_DIR = "{what} needs --data-dir or $ARDIA_DATA_DIR when --port, --ws or $ARDIA_CDP_URL picks the browser"
 
 
@@ -51,6 +57,15 @@ class SessionGone(ArdiaError, SessionError):
 
 class Refused(ArdiaError, control.MethodError):
     kind = "refused"
+
+
+class Refusal(Refused):
+    def __init__(self, code: str, name: str, existing: str | None = None):
+        template = REFUSALS.get(code)
+        message = template.format(name=name, existing=existing or name) if template else f"Ardia refused it ({code})"
+        Refused.__init__(self, message, code)
+        self.name = name
+        self.existing = existing or name
 
 
 class Denied(ArdiaError):
@@ -114,6 +129,19 @@ class Ardia:
             answer = control_call(self._gateway("profiles()"), "profiles")
         return [profile_row(p) for p in answer.get("profiles") or [] if isinstance(p, dict)]
 
+    def existing_name(self, name: str) -> str:
+        folded = name.strip().lower()
+        try:
+            rows = self.profiles()
+        except ArdiaError:
+            return name
+        return next((row["name"] for row in rows if row["name"].strip().lower() == folded), name)
+
+    def _refusal(self, error: Refused, name: str) -> Refused:
+        if error.code not in REFUSALS:
+            return error
+        return Refusal(error.code, name, self.existing_name(name) if error.code == "name-taken" else None)
+
     def connect(self, name: str, new: bool = False, agent: str | None = None, on_waiting=None, sleep=None) -> dict:
         agent = (agent or os.environ.get("ARDIA_AGENT") or "").strip() or DEFAULT_AGENT
         target = {"new": name} if new else {"profile": name}
@@ -127,6 +155,8 @@ class Ardia:
                 if not new and on_waiting is not None:
                     on_waiting()
                 state = self._wait_for_answer(gateway, request, sleep or time.sleep)
+        except Refused as error:
+            raise self._refusal(error, name) from None
         except BaseException:
             if request:
                 self._cancel(gateway, request)
@@ -170,8 +200,11 @@ class Ardia:
             session_call(self._gateway("disconnect()"), self._token(), "disconnect")
 
     def rename(self, name: str) -> None:
-        with translated():
-            session_call(self._gateway("rename()"), self._token(), "rename", name=name)
+        try:
+            with translated():
+                session_call(self._gateway("rename()"), self._token(), "rename", name=name)
+        except Refused as error:
+            raise self._refusal(error, name) from None
 
     def run(self, command: str, arg=None, window=None, tab=None):
         if arg is None and ":" in command:

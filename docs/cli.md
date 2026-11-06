@@ -107,7 +107,8 @@ session)` (or `Ardia.at(data_dir, session)`) has `profiles()`, `connect(name, ne
 and the data dir (async). They return plain data and raise one family of errors, each with a `kind` and a `code`:
 `Unreachable` (`unreachable`), `OutcomeUnknown` (`outcome_unknown`: the request went out and the connection dropped),
 `SessionGone` (`session`: none given, or it ended), `Refused` (`refused`, `code` is Ardia's, like `name-taken` or
-`unknown_command`), `Denied` and `Expired`. They subclass the older types, so `exec`'s `CommandError`, `ControlUnreachable`
+`unknown_command`; the profile refusals carry a sentence, and `name-taken` names the profile as Ardia spells it),
+`Denied` and `Expired`. They subclass the older types, so `exec`'s `CommandError`, `ControlUnreachable`
 and `SessionError` still catch them. `connect` withdraws its request (`&cancel=1`) on any exception, Ctrl-C or a signal
 included, and remembers the session it got.
 

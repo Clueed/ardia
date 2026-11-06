@@ -174,6 +174,16 @@ class Mcp(Base):
         self.assertEqual(ended["structuredContent"]["error"], "session")
         self.assertIn("has ended", ended["structuredContent"]["message"])
 
+    def test_refusals_read_as_sentences(self):
+        def respond(path, params):
+            if path == "/ardia/profiles":
+                return 200, {"profiles": [{"name": "Scout", "kind": "agent"}]}
+            return 409, {"error": "name-taken"}
+
+        self.serve(respond)
+        result = self.client().tool("connect", {"name": "scout", "new": True})
+        self.assertEqual(result["structuredContent"], {"error": "refused", "code": "name-taken", "message": "a profile is already named 'Scout': pick another name, or connect to 'Scout' to use it"})
+
     def test_unreachable_without_ardia(self):
         result = self.client().tool("profiles")
         self.assertTrue(result["isError"])

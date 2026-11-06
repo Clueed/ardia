@@ -3,7 +3,7 @@ import signal
 import sys
 from contextlib import contextmanager
 
-from ardia_cli.api import Ardia, ArdiaError, Denied, Expired, Refused, SessionGone
+from ardia_cli.api import Ardia, ArdiaError, Denied, Expired, Refusal, Refused, SessionGone
 
 UNREACHABLE_EXIT = 2
 SESSION_EXIT = 6
@@ -49,27 +49,18 @@ def complain(command: str, text: str) -> None:
     sys.stderr.flush()
 
 
-def route_message(code: str, name: str | None, ardia: Ardia | None = None) -> str:
-    template = MESSAGES.get(code)
+def route_message(error: Refused) -> str:
+    template = MESSAGES.get(error.code)
     if not template:
-        return f"Ardia refused it ({code})"
-    if code == "name-taken" and ardia is not None and name:
-        return template.format(name=name, existing=existing_name(ardia, name))
-    return template.format(name=name or "", existing=name or "")
+        return f"Ardia refused it ({error.code})"
+    if not isinstance(error, Refusal):
+        return error.message
+    return template.format(name=error.name, existing=error.existing)
 
 
-def existing_name(ardia: Ardia, name: str) -> str:
-    folded = name.strip().lower()
-    try:
-        rows = ardia.profiles()
-    except ArdiaError:
-        return name
-    return next((row["name"] for row in rows if row["name"].strip().lower() == folded), name)
-
-
-def failed(command: str, error: ArdiaError, name: str | None = None, ardia: Ardia | None = None) -> int:
+def failed(command: str, error: ArdiaError) -> int:
     if isinstance(error, Refused):
-        complain(command, route_message(error.code, name, ardia))
+        complain(command, route_message(error))
         return 1
     complain(command, error.message)
     if isinstance(error, SessionGone):
@@ -115,7 +106,7 @@ def connect(args, raw_stdout) -> int:
         complain("connect", "cancelled")
         return 128 + stop.signum if isinstance(stop, Stopped) else INTERRUPTED_EXIT
     except ArdiaError as error:
-        return failed("connect", error, name, ardia)
+        return failed("connect", error)
     output = json.dumps(answer, ensure_ascii=False) if args.json else answer["session"]
     sys.stderr.flush()
     raw_stdout.write(output + "\n")
@@ -136,6 +127,6 @@ def session_command(args, route: str, done: str, name: str | None = None) -> int
     try:
         ardia.rename(name) if route == "rename" else ardia.disconnect()
     except ArdiaError as error:
-        return failed(route, error, name, ardia)
+        return failed(route, error)
     sys.stdout.write(done + "\n")
     return 0
