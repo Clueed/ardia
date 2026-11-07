@@ -3,6 +3,7 @@ import { useBrowser, type BrowserState } from "../browser/store";
 import { activeTabId } from "../browser/model";
 import { isAgentProfile } from "../browser/agents";
 import { mainWindowFor } from "../windows/small";
+import { symbolIcon } from "../../lib/customIcon";
 
 const quietly = (call: Promise<unknown>) => void call.catch(() => {});
 
@@ -17,12 +18,29 @@ export function shownTabsByProfile(s: BrowserState): Record<string, string> {
   return shown;
 }
 
-export function openGatewayTab({ profile, url, background }: Omit<GatewayOpenTab, "request">): string | null {
+export const AGENT_FOLDER_ICON = symbolIcon("terminal");
+
+export const agentFolderOf = (s: Pick<BrowserState, "groups">, windowId: string, profileId: string, agentName: string) =>
+  Object.values(s.groups).find(
+    (g) => g.windowId === windowId && g.profileId === profileId && !g.pinned && !g.parentId && g.icon === AGENT_FOLDER_ICON && g.name === agentName,
+  );
+
+function fileIntoAgentFolder(tabId: string, agentName: string) {
+  const s = useBrowser.getState();
+  const tab = s.tabs[tabId];
+  if (!tab || tab.pin) return;
+  const folder = agentFolderOf(s, tab.windowId, tab.profileId, agentName);
+  if (folder) s.addTabsToGroup(folder.id, [tabId]);
+  else s.createGroup([tabId], { name: agentName, icon: AGENT_FOLDER_ICON });
+}
+
+export function openGatewayTab({ profile, agent: agentName, url, background }: Omit<GatewayOpenTab, "request">): string | null {
   const s = useBrowser.getState();
   if (!s.profiles[profile]) return null;
   const agent = isAgentProfile(s, profile);
   const windowId = mainWindowFor(s) ?? s.createWindow({ background: true });
   const tabId = useBrowser.getState().newTab(windowId, { url, profileId: profile, background: agent || background });
+  if (tabId && !agent && agentName?.trim()) fileIntoAgentFolder(tabId, agentName.trim());
   return tabId || null;
 }
 

@@ -31,7 +31,9 @@ the pins into `pyproject.toml`).
   5 expired or no answer (past its own 120 s it sends `&cancel=1`); 130 Ctrl-C, 143 SIGTERM and 129 SIGHUP, each after
   sending `&cancel=1` (2 s deadline), so a killed `connect` never leaves the owner's prompt up. A session on an agent
   profile wakes that profile's sleeping tabs (the 8 most recent; Ardia restores tabs asleep), so its pages are there
-  to drive after a restart.
+  to drive after a restart. A tab a session opens in one of the owner's profiles (`new_tab`, `browse open`, `Target.createTarget`)
+  goes into a folder named after the agent, with the terminal icon, in that profile's unpinned tabs (one per window,
+  agent name and profile; made on its first tab, reused after); an owner's folder that only shares the name is left alone.
 - `ardia disconnect [--session ID] [--data-dir DIR]` (`/ardia/disconnect?token=SESSION`) ends the session and closes
   its sockets; prints `disconnected`.
 - `ardia rename NAME [--session ID] [--data-dir DIR]` (`/ardia/rename?token=SESSION&name=NAME`) renames the session's

@@ -145,7 +145,7 @@ Engine files are in `engine/ardiacore/src/ardia/core`, app files in `packages/ar
   (`<data dir>/ArdiaGateway.json`) and proxies each session's sockets to the engine's token server, narrowed to the
   session's profile. A target's profile is its `browserContextId`, matched to a profile by asking one of that profile's
   tabs for its own target info (`ArdiaGatewayTabs`, `Target.getTargetInfo` on the tab); `Target.createTarget` opens an app
-  tab (`gateway.openTab`). Connect requests, sessions and renames reach JS as `gateway.*` events; fake them in a dev
+  tab (`gateway.openTab`, with the session's agent name, which files tabs in a real profile into that agent's folder). Connect requests, sessions and renames reach JS as `gateway.*` events; fake them in a dev
   instance with `globalThis.acCliConnect`.
 - **CEF-era code** (removed in 6bdf66ce): `git show 6bdf66ce^:packages/cef/ios/<file>`. Comments citing
   `packages/cef/…` mean: `ACBrowserView.mm`, `ACClient.mm` → `ArdiaWebView*.mm`; `ACChromeWindow.mm`,

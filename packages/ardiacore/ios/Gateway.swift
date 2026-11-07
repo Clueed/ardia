@@ -387,7 +387,7 @@ final class Gateway {
       open.done(nil)
       self.queue.asyncAfter(deadline: .now() + Self.requestLifetime) { self.lateOpens[id] = nil }
     }
-    onMain { [data = ["request": id, "profile": session.profileId, "url": url, "background": background] as [String: Any]] in ArdiaEvents.emit("gateway.openTab", data: data) }
+    onMain { [data = ["request": id, "profile": session.profileId, "agent": session.agent, "url": url, "background": background] as [String: Any]] in ArdiaEvents.emit("gateway.openTab", data: data) }
     return true
   }
 

@@ -6,7 +6,7 @@ const { cliProfiles, sessionsChanged, useCliConnect } = await import("../app/cli
 const { PROFILE_WAKE_LIMIT, wakeProfileTabs } = await import("../tabs/recentTabWarmup.ts");
 const { extensionsProfileId } = await import("../extensions/store.ts");
 const { originalProfile } = await import("../windows/small.ts");
-const { closeGatewayTab, openGatewayTab, shownTabsByProfile } = await import("../app/gatewayTabs.ts");
+const { AGENT_FOLDER_ICON, closeGatewayTab, openGatewayTab, shownTabsByProfile } = await import("../app/gatewayTabs.ts");
 
 const S = () => useBrowser.getState();
 const PERSONAL = { id: "default", name: "Personal", color: "plum", icon: null, createdAt: 0 };
@@ -129,6 +129,37 @@ test("a gateway tab for an agent opens in the background of the last focused win
   assert.equal(S().tabs[tabId].windowId, w);
   assert.equal(page(w), "default", "the owner's page doesn't move");
   assert.equal(openGatewayTab({ profile: "nobody", url: "about:blank", background: true }), null);
+});
+
+test("an agent's tabs in the owner's profile gather in a folder named after the agent", () => {
+  const { w } = setup();
+  const first = openGatewayTab({ profile: "default", agent: "Claude", url: "https://a.example/", background: true });
+  const second = openGatewayTab({ profile: "default", agent: "Claude", url: "https://b.example/", background: true });
+  const other = openGatewayTab({ profile: "default", agent: "Codex", url: "https://c.example/", background: true });
+  const folders = Object.values(S().groups);
+  const claude = folders.find((g) => g.name === "Claude");
+  assert.deepEqual(claude.tabIds, [first, second]);
+  assert.equal(claude.icon, AGENT_FOLDER_ICON);
+  assert.equal(claude.profileId, "default");
+  assert.equal(claude.windowId, w);
+  assert.equal(claude.pinned, false);
+  assert.deepEqual(folders.find((g) => g.name === "Codex").tabIds, [other]);
+  assert.equal(folders.length, 2);
+});
+
+test("an owner's own folder with the agent's name isn't taken over", () => {
+  const { w } = setup();
+  const owner = S().newTab(w, { url: "https://owner.example/c", background: true });
+  const mine = S().createGroup([owner], { name: "Claude" });
+  const tabId = openGatewayTab({ profile: "default", agent: "Claude", url: "https://a.example/", background: true });
+  assert.deepEqual(S().groups[mine].tabIds, [owner]);
+  assert.notEqual(Object.values(S().groups).find((g) => g.tabIds.includes(tabId)).id, mine);
+});
+
+test("an agent profile's own tabs stay out of folders", () => {
+  const { agent } = setup();
+  const tabId = openGatewayTab({ profile: agent, agent: "Claude", url: "https://agent.example/", background: true });
+  assert.ok(!Object.values(S().groups).some((g) => g.tabIds.includes(tabId)));
 });
 
 test("a late gateway tab closes only when it belongs to the asking profile", () => {
