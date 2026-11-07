@@ -1,9 +1,9 @@
 ---
 name: ardia
-description: Drive the user's running Ardia browser from the terminal with `ardia exec` (Python and pydoll over the Chrome DevTools Protocol) or `ardia browse` (agent-browser's commands: snapshot with @refs, click, fill, screenshot). Use when a task needs a real browser with the user's logins, to read the page the user is looking at, open pages, click, type, take screenshots or run JavaScript; to write, test and install userscripts that change how sites look or behave; to change Ardia's settings, shortcuts or colour theme through its config files; to run Ardia's own commands or react to its tab and window events with hooks; or to set up and run a daily report built from the sites the user pins and visits.
+description: Drive the user's running Ardia browser from the terminal with `ardia browse` (the bundled agent-browser: snapshot with @refs, click, fill, screenshot; the same as the agent_browser_* tools of `ardia mcp`) or `ardia exec` (Python and pydoll over the Chrome DevTools Protocol, for scripting). Use when a task needs a real browser with the user's logins, to read the page the user is looking at, open pages, click, type, take screenshots or run JavaScript; to write, test and install userscripts that change how sites look or behave; to change Ardia's settings, shortcuts or colour theme through its config files; to run Ardia's own commands or react to its tab and window events with hooks; or to set up and run a daily report built from the sites the user pins and visits.
 ---
 
-# Driving Ardia with `ardia exec`
+# Driving Ardia
 
 ## Connect first
 
@@ -12,7 +12,7 @@ Every agent connects before it drives pages, and works inside one profile.
 ```sh
 ardia tabs
 ardia connect --new research --agent claude-code
-ardia exec --session <ID> 'await tab.title()'
+ardia browse --ardia-session <ID> open example.com
 ardia disconnect --session <ID>
 ```
 
@@ -35,7 +35,28 @@ the windows. It needs no session.
 The examples below leave `--session ID` out; add it to every `ardia exec`, `ardia run` and `ardia scripts test`, and
 `--ardia-session ID` to every `ardia browse` (its own `--session` is agent-browser's namespace).
 
-## Running code
+## Browsing: `ardia browse` (agent-browser)
+
+`ardia browse <args>` runs the bundled agent-browser against your session: the same commands, `@eN` refs and output
+as upstream `agent-browser`. Over MCP (`ardia mcp`), each command is a tool: `agent_browser_open`,
+`agent_browser_snapshot`, `agent_browser_click`, `agent_browser_fill`, ... after the `connect` tool.
+
+```sh
+ardia browse open https://example.com
+ardia browse snapshot -i            # interactive elements with refs
+ardia browse fill @e2 "user@example.com"
+ardia browse click @e3
+ardia browse snapshot -i            # refs change after the page changes
+ardia browse get text @e5
+ardia browse screenshot /tmp/page.png
+```
+
+What's different on Ardia (refused commands, your tabs, the user's tabs, sessions, etiquette) is in
+`references/agent-browser.md`: read it first. `ardia browse skills get core` is agent-browser's own guide.
+
+## Scripting: `ardia exec`
+
+For loops, data extraction and anything agent-browser's commands don't cover, write Python.
 
 `ardia exec` runs Python against the Ardia the user has open, with top-level `await`. The value of the last
 expression is printed: strings as they are, anything else as its repr, or JSON with `--json`. Every run is a new
@@ -63,14 +84,6 @@ In scope:
 Exit status: 0 done, 1 your code raised or timed out (`--timeout`, default 300 s), 2 Ardia can't be reached or
 stopped the connection, 6 no session or it ended (connect again).
 On exit 2, tell the user to open Ardia and turn on Settings › "Let the ardia command control Ardia".
-
-## agent-browser commands: `ardia browse`
-
-`ardia browse <args>` takes agent-browser's commands, flags and output against this Ardia (`open`, `snapshot -i`,
-`click @e3`, `fill`, `screenshot`, ...). Use it when you know agent-browser or want ref-based steps without writing
-Python. It differs in ways that matter (background tabs get no input until `--show`, refs go stale on navigation,
-some commands are gated by Ardia's policy, and it needs your ardia session as `--ardia-session ID` or
-`$ARDIA_SESSION`): read `references/browse.md` first.
 
 ## Etiquette
 
