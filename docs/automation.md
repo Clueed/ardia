@@ -153,6 +153,28 @@ This is more than the token path grants: the token path reaches web pages throug
 while the socket reaches the browser's own commands (tabs, windows, sidebar, splits, groups, profiles' UI, sharing,
 clipboard writes, internal pages). That is the point of it, and it is opt-in behind the same setting.
 
+### Session tabs: createTarget and activate
+
+A session's pages live in its own agent window (`docs/agent-brief.md`, Agent windows), never in one of the owner's.
+`Target.createTarget` through the gateway opens the tab there, active in that window and in the session's profile
+(its agent's folder for a real profile), creating the window on the session's first tab; the owner's focused window
+and its active tab don't change, whatever `background` says. Popups and `target=_blank` links from those tabs open in
+the same window.
+
+`Target.activateTarget` and `Page.bringToFront` never reach the engine for a target in the session's scope: the
+gateway maps the target to its tab and asks JS (`gateway.activateTab`, answered by `activateReply` within 5 s):
+
+- a tab in the session's agent window is made its active tab (the tab it showed before is hidden, as in a real
+  window), and the result is `{}`;
+- a tab the owner has borrowed (clicked into their window) answers `{}` and stays where the owner is looking;
+- an agent profile's tab, or a real profile's tab in that agent's folder, moves into the agent window, unless the
+  owner is showing it;
+- anything else (the owner's own tabs, another profile's) is refused with the error
+  `ardia: that's the owner's tab; open your own` (`-32000`).
+
+Nothing an agent sends brings Ardia forward or changes the owner's focus: the agent window can't become key, and a
+page's own requests to be shown (fullscreen, `window.focus()`) stay inside it.
+
 ### Events
 
 | Event | `data` |

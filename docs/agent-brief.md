@@ -140,12 +140,25 @@ Engine files are in `engine/ardiacore/src/ardia/core`, app files in `packages/ar
   `profileOrder`; the pager's pages are `[AGENTS_PAGE, ...profileOrder]` (`state/browser/agents.ts`). A window on the Agents
   page has `agentsPage` set and, while an agent tab shows, `profileId` is that agent profile and `ownerProfileId` the owner's,
   which new tabs, links and new windows use (`ownerProfileOf`).
+- **Agent windows** (`state/windows/agentWindows.ts`, `packages/ardiacore/ios/ArdiaAgentWindow.mm`): each gateway
+  session gets a window of its own the first time it opens a tab or connects to an agent profile with tabs: a
+  `kind: "main"` window with `agentSession` set, sent to the shell as `kind: "agent"`. `isRegularWindow` leaves it out
+  (pinned sync, pin mirroring, the owner's window picks), and `setFocusedWindow` ignores it, so it never leads focus order. Natively
+  it sits 200 pt beyond every screen at the lowest level, can't become key or main, orders back instead of front,
+  acts out occlusion as visible (pages render and run rAF at 1280x800) and acts out page fullscreen without resizing.
+  Its tabs are muted, kept out of Now Playing and auto-PiP, and a permission prompt from one is denied in an agent
+  profile and queued for the owner, with a notification, in a real profile. Popups and target=_blank from them stay
+  in it. When the owner clicks one of its tabs (the Agents page, a folder, a notification), the tab moves into the
+  owner's window, same target and CDP session, and moves back once the owner shows another tab. When the session
+  ends the window closes and its tabs park in the owner's window (in the agent's folder for a real profile);
+  `doc.json` always saves them parked, so a relaunch never restores an agent window. Drive one in a dev instance
+  with `ac.agentWindows` (with `clickTab`).
 - **The CLI gateway** (`packages/ardiacore/ios/Gateway*.swift`, the `ArdiaGateway` module; JS `state/app/cliConnect.ts`,
   `gatewayTabs.ts`): with control on, the app serves the `ardia` command on its own 127.0.0.1 port
   (`<data dir>/ArdiaGateway.json`) and proxies each session's sockets to the engine's token server, narrowed to the
   session's profile. A target's profile is its `browserContextId`, matched to a profile by asking one of that profile's
   tabs for its own target info (`ArdiaGatewayTabs`, `Target.getTargetInfo` on the tab); `Target.createTarget` opens an app
-  tab (`gateway.openTab`, with the session's agent name, which files tabs in a real profile into that agent's folder). Connect requests, sessions and renames reach JS as `gateway.*` events; fake them in a dev
+  tab (`gateway.openTab`, with the session id and agent name) in that session's agent window. `Target.activateTarget` and `Page.bringToFront` go to JS (`gateway.activateTab`), which applies the rule in `docs/automation.md`. Connect requests, sessions and renames reach JS as `gateway.*` events; fake them in a dev
   instance with `globalThis.acCliConnect`.
 - **CEF-era code** (removed in 6bdf66ce): `git show 6bdf66ce^:packages/cef/ios/<file>`. Comments citing
   `packages/cef/…` mean: `ACBrowserView.mm`, `ACClient.mm` → `ArdiaWebView*.mm`; `ACChromeWindow.mm`,
