@@ -22,7 +22,8 @@ import { engineProfile } from "../browser/model";
 import { createAgentProfile } from "../profiles/agents";
 import { seedAgentExtensions } from "../extensions/agentExtensions";
 import { noteGatewayActive, useCli } from "./cliControl";
-import { startGatewayTabs } from "./gatewayTabs";
+import { agentSessionsChanged, startGatewayTabs } from "./gatewayTabs";
+import { wakeIntoAgentWindow } from "../windows/agentWindows";
 import { startSessionRuns } from "../automation/sessionRun";
 import { wakeProfileTabs } from "../tabs/recentTabWarmup";
 
@@ -130,8 +131,9 @@ export function sessionsChanged({ sessions }: { sessions: CliSession[] }) {
   const known = new Set(useCliConnect.getState().sessions.map((x) => x.id));
   useCliConnect.setState({ sessions: next });
   const s = useBrowser.getState();
-  const joined = new Set(next.filter((x) => !known.has(x.id) && isAgentProfile(s, x.profile)).map((x) => x.profile));
-  for (const profile of joined) wakeProfileTabs(profile);
+  const joining = next.filter((x) => !known.has(x.id) && isAgentProfile(s, x.profile));
+  for (const profile of new Set(joining.map((x) => x.profile))) wakeProfileTabs(profile);
+  for (const x of joining) wakeIntoAgentWindow(x.id, x.profile);
 }
 
 function renamed({ profile, name }: { profile: string; name: string }) {
@@ -179,6 +181,9 @@ export function startCliConnect() {
       },
     );
   };
+  useCliConnect.subscribe((c, prev) => {
+    if (c.sessions !== prev.sessions) agentSessionsChanged(c.sessions.map((x) => x.id));
+  });
   useCli.subscribe((c) => follow(c.server?.state === "on"));
   useBrowser.subscribe((s, prev) => {
     if (s.profiles !== prev.profiles || s.profileOrder !== prev.profileOrder) void pushProfiles();

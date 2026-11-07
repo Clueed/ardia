@@ -10,7 +10,11 @@ export type CliRename = { profile: string; name: string };
 
 export type CliConnectReply = { request: string; allow: true; profile: string } | { request: string; allow: false };
 
-export type GatewayOpenTab = { request: string; profile: string; agent?: string; url: string; background: boolean };
+export type GatewayOpenTab = { request: string; session?: string; profile: string; agent?: string; url: string; background: boolean };
+
+export type GatewayActivateTab = { request: string; session: string; profile: string; agent?: string; tabId: string };
+
+export type GatewayActivateReply = { request: string; error: string | null };
 
 export type GatewayRun = { request: string; profile: string; command: string; arg: unknown; window: string | null; tab: string | null };
 

@@ -69,6 +69,10 @@ export function closingTabs(s: BrowserState, ids: string[], { lastClosesWindow =
     const view = viewTabIds(next, w.id);
     const shown = view.filter((id) => gone.includes(id));
     if (!shown.length || !view.every((id) => gone.includes(id) || isAsleep(next.tabs[id]))) continue;
+    if (w.agentSession) {
+      if (w.tabIds.every((id) => gone.includes(id))) closedWindows.push(w.id);
+      continue;
+    }
     if (isAgentProfile(next, w.profileId)) {
       next = ownerUnderAgents(next, w.id, gone);
       continue;

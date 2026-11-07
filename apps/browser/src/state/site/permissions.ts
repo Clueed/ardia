@@ -12,6 +12,11 @@ import { patchPage, pageOf, usePages } from "../tabs/pageState";
 import { startDeviceChoosers } from "./deviceChoosers";
 import { originForSecurityDisplay } from "../../lib/url";
 import { permissionGate } from "./permissionGate";
+import { backgroundInstance } from "../../platform/app";
+import { onNotificationResponse, postNotification } from "../../platform/notifications";
+import { isAgentProfile } from "../browser/agents";
+import { mainWindowFor } from "../windows/small";
+import { inAgentWindow, showAgentTab } from "../windows/agentWindows";
 
 const queues = new Map<string, PermissionRequest[]>();
 let started = false;
@@ -21,13 +26,42 @@ export function startPermissionPrompts() {
   started = true;
   startDeviceChoosers();
   onPermission((request) => {
-    if (request.tabId) gated(request.tabId, request);
+    if (request.tabId) fromAgent(request.tabId, request) || gated(request.tabId, request);
+  });
+  onNotificationResponse((response) => {
+    const tabId = (response.data as { agentPermission?: unknown } | null)?.agentPermission;
+    const windowId = mainWindowFor(useBrowser.getState());
+    if (typeof tabId === "string" && windowId) showAgentTab(windowId, tabId);
   });
   onPermissionDismissed(({ id }) => {
     deciding.get(id)?.controller.abort();
     deciding.delete(id);
     drop(id);
   });
+}
+
+function fromAgent(tabId: string, request: PermissionRequest): boolean {
+  const s = useBrowser.getState();
+  const tab = s.tabs[tabId];
+  if (!tab || !inAgentWindow(s, tabId)) return false;
+  if (isAgentProfile(s, tab.profileId)) {
+    void resolvePermission(request.id, "deny", false);
+    return true;
+  }
+  enqueue(tabId, request);
+  void notifyOwner(tabId, request);
+  return true;
+}
+
+async function notifyOwner(tabId: string, request: PermissionRequest) {
+  const title = `An agent's tab asks for ${request.permissions.join(", ")}`;
+  const body = `${originForSecurityDisplay(request.origin)} is waiting for your answer.`;
+  if (backgroundInstance) return console.info(`[permissions] would notify: ${title} ${body}`);
+  try {
+    await postNotification({ id: `agent-permission-${request.id}`, title, body, data: { agentPermission: tabId } });
+  } catch (error) {
+    console.warn("[permissions] couldn't post the agent notification", error);
+  }
 }
 
 const deciding = new Map<string, { controller: AbortController; tabId: string }>();

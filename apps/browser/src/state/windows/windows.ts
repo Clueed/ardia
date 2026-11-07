@@ -28,7 +28,7 @@ import { sharedElsewhere, sharesTabs } from "../tabs/tabShare";
 import { isRegularWindow, isSmall, isSmallWindow, lastActiveProfile, linkProfileOf, mainWindowFor } from "./small";
 import { activated, apply, removeTabs, withNewTab } from "../tabs/tabs";
 import type { AdoptId, BrowserWindow, ClosedWindow, Frame, ParkedPins, Tab, WindowKind } from "../browser/types";
-import { emptyWindow, smallWindow, withWindow } from "./newWindow";
+import { emptyWindow, smallWindow, withAgentWindow, withWindow } from "./newWindow";
 import { lastClosedEntry, lastClosedTab, restoreTab, restoreWindow } from "./reopenClosed";
 import { groupTree, regrouped, splitsWithin, withSplitsBack } from "./groupMoves";
 import { commonGroup, orderSections } from "../groups/groups";
@@ -46,6 +46,7 @@ export type CreateWindowOptions = {
   linkPointer?: [number, number];
   background?: boolean;
   chromeWindow?: string;
+  agentSession?: string;
 };
 
 export type WindowsSlice = {
@@ -173,19 +174,20 @@ export const createWindowsSlice: StateCreator<BrowserState, [], [], WindowsSlice
     const profileId = original !== undefined
       ? incognitoProfileId(id, original)
       : (known ?? (small ? lastActiveProfile(s) : s.settings.defaultProfileId));
+    const agent = kind === "main" && o.agentSession ? { agentSession: o.agentSession, sidebarOpen: false } : {};
     const w: BrowserWindow =
       kind === "small"
         ? { ...smallWindow(id, profileId, o.frame ?? null), ...(o.linkPointer ? { linkPointer: o.linkPointer } : {}) }
-        : { ...emptyWindow(id, profileId, kind, o.frame ?? null), ...(o.chromeWindow ? { chromeWindow: o.chromeWindow } : {}) };
-    let next = withWindow(s, w);
+        : { ...emptyWindow(id, profileId, kind, o.frame ?? null), ...(o.chromeWindow ? { chromeWindow: o.chromeWindow } : {}), ...agent };
+    let next = agent.agentSession ? withAgentWindow(s, w) : withWindow(s, w);
     if (o.tabIds?.length && !small) next = moveTabsInto(next, o.tabIds, id);
-    if (!next.windows[id]!.tabIds.length) next = withNewTab(next, id, { url: o.url, adoptId: o.adoptId })[0];
+    if (!next.windows[id]!.tabIds.length) next = withNewTab(next, id, { url: o.url, adoptId: o.adoptId, ...(agent.agentSession ? { profileId } : {}) })[0];
     const first = next.windows[id]!.tabIds[0]!;
     const shown = next.windows[id]!.activeTabIds[next.tabs[first]!.profileId] ?? first;
-    if (!small) next = adoptParkedPins(next, id, next.tabs[shown]!.profileId);
+    if (!small && !agent.agentSession) next = adoptParkedPins(next, id, next.tabs[shown]!.profileId);
     next = apply(next, activated(next, shown));
     const focused = focusedWindowOf(s);
-    if (o.background && focused && s.windows[focused]) {
+    if (o.background && !agent.agentSession && focused && s.windows[focused]) {
       next = {
         ...next,
         ui: { ...next.ui, focusOrder: [focused, id, ...s.ui.focusOrder.filter((w) => w !== focused)], lastProfileId: s.ui.lastProfileId },
@@ -203,7 +205,7 @@ export const createWindowsSlice: StateCreator<BrowserState, [], [], WindowsSlice
     const tabIds = tabs.map((t) => t.id);
     const small = isSmallWindow(w);
     let closedWindows = s.closedWindows;
-    if (w.kind !== "private" && !small && tabs.some((t) => t.url)) {
+    if (w.kind !== "private" && !small && !w.agentSession && tabs.some((t) => t.url)) {
       const active = new Set(Object.values(w.activeTabIds));
       const entry = closedWindowEntry(
         w,

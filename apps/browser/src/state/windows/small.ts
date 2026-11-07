@@ -9,7 +9,7 @@ export const SMALL_LIGHTS_CENTER: [number, number] = [20, SMALL_BAR_HEIGHT / 2];
 
 export const isSmallWindow = (w: BrowserWindow | undefined): boolean => w?.kind === "small";
 
-export const isRegularWindow = (w: BrowserWindow | undefined): w is MainWindow => w?.kind === "main";
+export const isRegularWindow = (w: BrowserWindow | undefined): w is MainWindow => w?.kind === "main" && !w.agentSession;
 
 export const isSmall = (s: Pick<BrowserState, "windows">, windowId?: string | null): boolean =>
   !!windowId && s.windows[windowId]?.kind === "small";

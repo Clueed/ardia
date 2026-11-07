@@ -12,6 +12,7 @@ import { useBasePaletteValue } from "../config/hooks";
 import type { BasePalette } from "../../lib/themeFile";
 import { topAppSiblings } from "../pins/topApps";
 import { sharingProfiles } from "./profiles";
+import { agentWindowTabIds, isAgentWindow } from "../windows/agentWindows";
 
 export function useProfileRecords(): Record<string, Profile>;
 export function useProfileRecords<T>(select: (profiles: Record<string, Profile>) => T): T;
@@ -61,7 +62,8 @@ export const useProfileDataStats = (profileId: string): string =>
 
 export const useAgentProfileIds = (): string[] => useBrowser(useShallow((s) => agentProfileIds(s.profiles)));
 
-export const useAgentTabIds = (windowId: string, profileId: string): string[] => useBrowser(useShallow((s) => viewTabIds(s, windowId, profileId)));
+export const useAgentTabIds = (windowId: string, profileId: string): string[] =>
+  useBrowser(useShallow((s) => (isAgentWindow(s.windows[windowId]) ? viewTabIds(s, windowId, profileId) : [...viewTabIds(s, windowId, profileId), ...agentWindowTabIds(s, profileId)])));
 
 export const useAgentFolderCollapsed = (profileId: string): boolean => useAgentFolders((f) => !!f.collapsed[profileId]);
 

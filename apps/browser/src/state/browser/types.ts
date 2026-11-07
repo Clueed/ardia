@@ -32,6 +32,7 @@ type WindowBase = {
   createdAt: number;
   agentsPage?: true;
   ownerProfileId?: string;
+  agentSession?: string;
 };
 
 export type BrowserWindow =

@@ -1,6 +1,7 @@
 import { discardOffered, type OpenWindowRequest } from "../../platform/tabs";
 import { openWindow } from "../browser/actions";
-import { useBrowser } from "../browser/store";
+import { useBrowser, type BrowserState } from "../browser/store";
+import { agentWindowOf, borrowedBy, isAgentWindow } from "../windows/agentWindows";
 import { engineProfile } from "../browser/model";
 import { isAgentProfile } from "../browser/agents";
 import { peekSourceOf } from "../peek/peek";
@@ -36,6 +37,12 @@ export function openFromPage(request: OpenWindowRequest, page: PageRef) {
   });
 }
 
+function agentHomeOf(s: BrowserState, windowId: string, tabId: string | undefined): string | undefined {
+  if (isAgentWindow(s.windows[windowId])) return windowId;
+  const session = tabId ? borrowedBy(tabId) : undefined;
+  return session ? agentWindowOf(s, session) : undefined;
+}
+
 function openNow(request: OpenWindowRequest, page: PageRef, gated: boolean) {
   const { url, disposition, profile, point } = request;
   const adoptId = asAdoptId(request.adoptId);
@@ -46,6 +53,10 @@ function openNow(request: OpenWindowRequest, page: PageRef, gated: boolean) {
   if (disposition === "current" || (disposition === "peek" && (peekSource || isSmall(s, w.id)))) {
     if (page.tabId) s.navigate(page.tabId, url, { userInitiated: false });
     return;
+  }
+  const agentHome = agentHomeOf(s, w.id, page.tabId);
+  if (agentHome && disposition !== "incognito") {
+    return void s.newTab(agentHome, { url, adoptId, openerId: page.tabId, profileId: page.profileId, background: disposition === "background", gated });
   }
   if (disposition === "peek") {
     if (page.tabId) s.openPeek(page.tabId, url, point ?? null);

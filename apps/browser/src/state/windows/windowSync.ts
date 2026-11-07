@@ -60,9 +60,10 @@ export function createWindowSync({ port, getState, isQuitting, lightsCenter, isU
         ? { kind: "small" as const, size: s.settings.littleArdiaSize, ...(claim?.startsWith("link:") ? { claim } : {}), ...(w.linkPointer ? { pointer: w.linkPointer } : {}) }
         : {};
       const made = w.kind !== "small" && w.chromeWindow ? { chromeWindow: w.chromeWindow } : {};
+      const agent = w.agentSession ? { kind: "agent" as const, focus: false } : {};
       port.open(
         id,
-        { frame: w.frame, incognito: w.kind === "private", title: titles.get(id), focus, profile, ...(behind ? { behind } : {}), ...(prev && w.kind !== "small" && !w.chromeWindow ? { animated: true } : {}), ...small, ...made },
+        { frame: w.frame, incognito: w.kind === "private", title: titles.get(id), focus, profile, ...(behind ? { behind } : {}), ...(prev && w.kind !== "small" && !w.chromeWindow ? { animated: true } : {}), ...small, ...made, ...agent },
         lightsCenter(s, id),
       );
     }

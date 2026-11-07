@@ -25,3 +25,5 @@ export function withWindow(s: BrowserState, w: BrowserWindow): BrowserState {
     ui: { ...s.ui, focusOrder: [w.id, ...s.ui.focusOrder], lastProfileId: linkProfileOf(s, w) ?? s.ui.lastProfileId },
   };
 }
+
+export const withAgentWindow = (s: BrowserState, w: BrowserWindow): BrowserState => ({ ...s, windows: { ...s.windows, [w.id]: w }, windowOrder: [...s.windowOrder, w.id] });

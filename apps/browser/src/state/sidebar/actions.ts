@@ -14,10 +14,12 @@ import type { Tab } from "../browser/types";
 import type { BookmarkFolderChoice } from "./menuParts";
 import { DEFAULT_SIDEBAR_WIDTH } from "../../lib/windowLayout";
 import { measureRow, setSidebarUi, sidebarUi, type Target } from "./sidebarUi";
+import { showAgentTab } from "../windows/agentWindows";
 
 const store = () => useBrowser.getState();
 
 export function clickTab(windowId: string, tabId: string, mods: ClickMods = {}) {
+  if (showAgentTab(windowId, tabId)) return store().clickTab(windowId, tabId);
   store().clickTab(windowId, tabId, mods);
 }
 

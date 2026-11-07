@@ -5,6 +5,7 @@ import { engineProfile } from "../browser/model";
 import { asAdoptId } from "../tabs/adoptIds";
 import { agentProfileIds } from "../browser/agents";
 import { mainWindowFor } from "../windows/small";
+import { agentWindowOfProfile } from "../windows/agentWindows";
 
 type Request<A extends TabsRequest["action"]> = Extract<TabsRequest, { action: A }>;
 
@@ -30,8 +31,11 @@ function agentOf(profile: string): string | undefined {
 function openAgentTab(request: Request<"adopt"> | Request<"adoptInto">) {
   const profileId = agentOf(request.profile)!;
   const adoptId = asAdoptId(request.adoptId);
-  const windowId = mainWindowFor(useBrowser.getState());
-  if (windowId) useBrowser.getState().newTab(windowId, { url: request.url, adoptId, profileId, background: true });
+  const s = useBrowser.getState();
+  const agentWindow = agentWindowOfProfile(s, profileId);
+  if (agentWindow) return void s.newTab(agentWindow, { url: request.url, adoptId, profileId });
+  const windowId = mainWindowFor(s);
+  if (windowId) s.newTab(windowId, { url: request.url, adoptId, profileId, background: true });
   else openWindow({ url: request.url, adoptId, profileId, background: true });
 }
 

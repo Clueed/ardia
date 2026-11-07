@@ -7,6 +7,7 @@ import { webviews } from "../../platform/webviews";
 import { useBrowser } from "../browser/store";
 import type { BrowserState } from "../browser/store";
 import { activeTabId } from "../browser/model";
+import { inAgentWindow } from "../windows/agentWindows";
 import { peekTabId } from "../peek/peek";
 import { splitOf, splitTabIdsOf } from "../splits/splits";
 import { hostOf } from "@ardia/core";
@@ -49,7 +50,8 @@ export function setPictureInPictureState(tabId: string, { kind, active }: Pictur
   });
 }
 
-export function setNowPlaying(tabId: string, state: NowPlaying | null) {
+export function setNowPlaying(tabId: string, playing: NowPlaying | null) {
+  const state = playing && !inAgentWindow(useBrowser.getState(), tabId) ? playing : null;
   useMedia.setState((s) => {
     const sessions = { ...s.sessions };
     const dismissed = { ...s.dismissed };

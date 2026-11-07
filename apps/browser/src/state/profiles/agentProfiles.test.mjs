@@ -6,7 +6,7 @@ const { cliProfiles, sessionsChanged, useCliConnect } = await import("../app/cli
 const { PROFILE_WAKE_LIMIT, wakeProfileTabs } = await import("../tabs/recentTabWarmup.ts");
 const { extensionsProfileId } = await import("../extensions/store.ts");
 const { originalProfile } = await import("../windows/small.ts");
-const { AGENT_FOLDER_ICON, closeGatewayTab, openGatewayTab, shownTabsByProfile } = await import("../app/gatewayTabs.ts");
+const { AGENT_FOLDER_ICON, OWNER_TAB, activateGatewayTab, agentSessionsChanged, closeGatewayTab, openGatewayTab, shownTabsByProfile } = await import("../app/gatewayTabs.ts");
 
 const S = () => useBrowser.getState();
 const PERSONAL = { id: "default", name: "Personal", color: "plum", icon: null, createdAt: 0 };
@@ -129,6 +129,56 @@ test("a gateway tab for an agent opens in the background of the last focused win
   assert.equal(S().tabs[tabId].windowId, w);
   assert.equal(page(w), "default", "the owner's page doesn't move");
   assert.equal(openGatewayTab({ profile: "nobody", url: "about:blank", background: true }), null);
+});
+
+test("a session's gateway tabs open in its own agent window, never in an owner window", () => {
+  const { agent, w } = setup();
+  const owned = new Set(Object.keys(S().windows));
+  const first = openGatewayTab({ session: "s1", profile: agent, url: "https://agent.example/a", background: true });
+  const home = S().tabs[first].windowId;
+  assert.ok(!owned.has(home), "a new window, not one of the owner's");
+  assert.equal(S().windows[home].agentSession, "s1");
+  const second = openGatewayTab({ session: "s1", profile: "default", agent: "Claude", url: "https://agent.example/b", background: true });
+  assert.equal(S().tabs[second].windowId, home);
+  assert.equal(S().windows[home].activeTabIds.default, second, "opens active in the agent window");
+  const other = openGatewayTab({ session: "s2", profile: agent, url: "https://agent.example/c", background: false });
+  assert.notEqual(S().tabs[other].windowId, home);
+  assert.ok(!owned.has(S().tabs[other].windowId));
+  assert.deepEqual(S().windows[w].tabIds.filter((id) => [first, second, other].includes(id)), []);
+  assert.equal(S().ui.focusOrder[0], w, "the owner's window keeps focus");
+});
+
+test("a session's agent window closes when the session ends, its tabs parked in the owner's window", () => {
+  const { agent, w } = setup();
+  agentSessionsChanged(["s1"]);
+  const own = openGatewayTab({ session: "s1", profile: agent, url: "https://agent.example/a", background: true });
+  const shared = openGatewayTab({ session: "s1", profile: "default", agent: "Claude", url: "https://agent.example/b", background: true });
+  const home = S().tabs[own].windowId;
+  const ownerShows = S().windows[w].activeTabIds.default;
+  agentSessionsChanged([]);
+  assert.equal(S().windows[home], undefined);
+  assert.equal(S().tabs[own].windowId, w);
+  assert.equal(S().tabs[shared].windowId, w);
+  assert.equal(S().windows[w].activeTabIds.default, ownerShows, "the owner's tab stays shown");
+  assert.deepEqual(Object.values(S().groups).find((g) => g.name === "Claude" && g.windowId === w)?.tabIds, [shared]);
+  assert.equal(S().closedWindows.length, 0);
+});
+
+test("an agent may bring its own tabs forward, never the owner's", () => {
+  const { agent, w } = setup();
+  agentSessionsChanged(["s1"]);
+  const ownerTab = S().windows[w].activeTabIds.default;
+  const first = openGatewayTab({ session: "s1", profile: "default", agent: "Claude", url: "https://agent.example/a", background: true });
+  const second = openGatewayTab({ session: "s1", profile: "default", agent: "Claude", url: "https://agent.example/b", background: true });
+  assert.equal(activateGatewayTab({ session: "s1", profile: "default", agent: "Claude", tabId: first }), null);
+  assert.equal(S().windows[S().tabs[first].windowId].activeTabIds.default, first);
+  assert.equal(activateGatewayTab({ session: "s1", profile: "default", agent: "Claude", tabId: ownerTab }), OWNER_TAB);
+  assert.equal(S().windows[w].activeTabIds.default, ownerTab);
+  const restored = S().newTab(w, { url: "https://agent.example/old", profileId: agent, background: true });
+  assert.equal(activateGatewayTab({ session: "s2", profile: agent, tabId: restored }), null);
+  assert.equal(S().windows[S().tabs[restored].windowId].agentSession, "s2", "an agent profile's tab moves into the session's window");
+  assert.equal(activateGatewayTab({ session: "s2", profile: agent, tabId: second }), OWNER_TAB, "another profile's tab is refused");
+  agentSessionsChanged([]);
 });
 
 test("an agent's tabs in the owner's profile gather in a folder named after the agent", () => {

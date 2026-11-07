@@ -16,6 +16,7 @@ import { sessionWithCleanUpMinutes } from "../settings/cleanUpAfter";
 import { parseSettingsMeta, sessionWithSettingsMeta } from "../settings/settings";
 import { sessionWithOwnTabMutes } from "../tabs/mute";
 import { isRegularWindow } from "../windows/small";
+import { withAgentWindowsParked } from "../windows/agentWindows";
 import { sessionWithPinChoiceStamps } from "../pins/pinChoices";
 import { profilesAfterSharingSetting } from "../pins/topApps";
 import { isFields, isString, isStringList } from "../../lib/decode";
@@ -48,7 +49,10 @@ function doc<F extends Record<string, Field<Key, unknown>>>(name: string, versio
   return {
     name,
     reads: [...new Set(entries.flatMap(([, f]) => f.reads))],
-    json: (s) => versionedJson(Object.fromEntries(entries.map(([key, f]) => [key, f.save(s)])), version),
+    json: (s) => {
+      const parked = withAgentWindowsParked(s);
+      return versionedJson(Object.fromEntries(entries.map(([key, f]) => [key, f.save(parked)])), version);
+    },
   };
 }
 
