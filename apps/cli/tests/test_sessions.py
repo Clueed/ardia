@@ -317,29 +317,65 @@ class Browse(Base):
         self.assertEqual(status, endpoint.SESSION_EXIT)
         self.assertIn("Connect first", err)
 
-    def test_each_ardia_session_gets_its_own_daemon(self):
-        from ardia_cli.browse import client
+    def fake_agent_browser(self) -> tuple[Path, Path]:
+        record = self.root / "agent-browser.json"
+        program = self.root / "agent-browser"
+        program.write_text(
+            "#!" + sys.executable + "\nimport json, os, sys\n"
+            f"open({str(record)!r}, 'w').write(json.dumps({{'argv': sys.argv[1:], 'env': dict(os.environ)}}))\n"
+        )
+        program.chmod(0o755)
+        return program, record
 
-        first = client.endpoint_key(None, None, self.root, SESSION_TOKEN)
-        second = client.endpoint_key(None, None, self.root, "session-" + "t" * 40)
-        self.assertNotEqual(first[0], second[0])
-        self.assertNotIn(SESSION_TOKEN, first[0] + first[1])
+    def run_wrapper(self, *argv: str) -> tuple[int, str, str, dict | None]:
+        import subprocess
 
-    def test_tab_active_follows_the_session(self):
-        import asyncio
-        import types
+        program, record = self.fake_agent_browser()
+        env = dict(os.environ, ARDIA_DATA_DIR=str(self.root), ARDIA_AGENT_BROWSER=str(program), AGENT_BROWSER_CDP="ws://elsewhere:1/devtools/browser/x")
+        done = subprocess.run([sys.executable, "-m", "ardia_cli", "browse", *argv], cwd=Path(__file__).resolve().parents[1],
+                              env=env, capture_output=True, text=True, timeout=30)
+        seen = json.loads(record.read_text()) if record.exists() else None
+        return done.returncode, done.stdout, done.stderr, seen
 
-        from ardia_cli.browse.commands import user_active_tab
-        from ardia_cli.browse.errors import SessionEnded
+    def test_runs_agent_browser_on_the_session_without_the_token_in_argv(self):
+        import hashlib
 
         fake = self.session_server()
-        live = types.SimpleNamespace(endpoint=endpoint.resolve(session=SESSION_TOKEN))
-        self.assertEqual(asyncio.run(user_active_tab(live)), "T1")
-        self.assertEqual(fake.routes("/ardia/active"), [{"token": SESSION_TOKEN}])
-        ended = types.SimpleNamespace(endpoint=endpoint.resolve(session="session-" + "g" * 40))
-        with self.assertRaises(SessionEnded) as caught:
-            asyncio.run(user_active_tab(ended))
-        self.assertEqual(caught.exception.exit_code, endpoint.SESSION_EXIT)
+        status, out, err, seen = self.run_wrapper("--ardia-session", SESSION_TOKEN, "open", "example.com", "--json")
+        self.assertEqual(status, 0, err)
+        self.assertEqual(seen["argv"], ["open", "example.com", "--json"])
+        env = seen["env"]
+        self.assertEqual(env["AGENT_BROWSER_CDP"], f"ws://127.0.0.1:{fake.port}/devtools/browser/abc?token={SESSION_TOKEN}")
+        self.assertEqual(env["AGENT_BROWSER_SESSION"], hashlib.sha256(SESSION_TOKEN.encode()).hexdigest()[:16])
+        self.assertEqual(env["AGENT_BROWSER_NO_VERSION_CHECK"], "1")
+        self.assertTrue(env["AGENT_BROWSER_CONFIG"].endswith("ardia_cli/agent-browser.json"))
+        self.assertTrue(Path(env["AGENT_BROWSER_CONFIG"]).is_file())
+        self.assertNotIn(SESSION_TOKEN, out + err)
+
+    def test_version_and_skills_need_no_session(self):
+        self.session_server()
+        for argv in (("--version",), ("skills", "get", "core")):
+            with self.subTest(argv=argv):
+                status, _, err, seen = self.run_wrapper(*argv)
+                self.assertEqual(status, 0, err)
+                self.assertEqual(seen["argv"], list(argv))
+                self.assertNotIn("AGENT_BROWSER_CDP", seen["env"])
+
+    def test_refuses_flags_that_move_it_off_the_session(self):
+        self.session_server()
+        for argv in (("--cdp", "9222", "snapshot"), ("--config=x.json", "snapshot"), ("--auto-connect", "snapshot"), ("get", "cdp-url"), ("batch", "get cdp-url")):
+            with self.subTest(argv=argv):
+                status, _, err, seen = self.run_wrapper("--ardia-session", SESSION_TOKEN, *argv)
+                self.assertEqual(status, 64)
+                self.assertIn("isn't allowed", err)
+                self.assertIsNone(seen)
+
+    def test_an_ended_session_exits_6(self):
+        self.session_server()
+        status, _, err, seen = self.run_wrapper("--ardia-session", "session-" + "e" * 40, "snapshot")
+        self.assertEqual(status, endpoint.SESSION_EXIT)
+        self.assertIn("has ended", err)
+        self.assertIsNone(seen)
 
 
 class CommandHooks(Base):

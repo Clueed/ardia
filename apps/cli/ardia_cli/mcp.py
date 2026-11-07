@@ -1,22 +1,43 @@
 import asyncio
 import json
 import os
+import signal
 import sys
 import threading
+from pathlib import Path
 
-from ardia_cli import __version__
-from ardia_cli.api import Ardia, ArdiaError, Expired, SessionGone, Unreachable
-from ardia_cli.redact import redact
+from ardia_cli import __version__, agent_browser, endpoint
+from ardia_cli.api import Ardia, ArdiaError, Expired, SessionGone
+from ardia_cli.redact import add_secret, redact
 
-PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
-BROWSE_TIMEOUT = 180
+PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
+FORWARDED_TOOLS = Path(__file__).resolve().parent / "agent_browser_tools.json"
+DENIED_TOOLS = frozenset({
+    "agent_browser_tools_profiles", "agent_browser_install", "agent_browser_upgrade", "agent_browser_doctor",
+    "agent_browser_connect", "agent_browser_dashboard_start", "agent_browser_dashboard_stop", "agent_browser_chat",
+    "agent_browser_confirm", "agent_browser_deny", "agent_browser_profiles", "agent_browser_skills_list",
+    "agent_browser_skills_get", "agent_browser_skills_path", "agent_browser_get_cdp_url", "agent_browser_inspect",
+    "agent_browser_plugin_add", "agent_browser_plugin_list", "agent_browser_plugin_show", "agent_browser_plugin_run",
+    "agent_browser_session", "agent_browser_session_list", "agent_browser_session_id", "agent_browser_session_info",
+})
+DROPPED_ARGUMENTS = frozenset({
+    "session", "namespace", "all", "allowedDomains", "caCert", "clearCaCert", "useSystemCa", "idleTimeout",
+    "restore", "restoreSave", "restoreCheckFn", "restoreCheckText", "restoreCheckUrl",
+})
+REFUSED_EXTRA_ARGS = agent_browser.REFUSED_FLAGS + ("--session", "--namespace")
+CHILD_START_TIMEOUT = 20
+CHILD_STOP_WAIT = 2
+CHILD_CALL_SLACK = 30
+DEFAULT_CALL_TIMEOUT_MS = 120000
+LINE_LIMIT = 256 * 1024 * 1024
 EVENT_WAIT_LIMIT = 300
 NO_SESSION = "No session yet: call connect first (new=true makes an agent profile of your own, without a prompt)."
 INSTRUCTIONS = """\
 Drives the Ardia browser the user is running. Call connect first: connect(name, new=true) makes an agent profile
 of your own with no prompt; connect(name) on one of the owner's profiles waits until the owner allows it in Ardia.
 The session lasts until disconnect, Ardia quits, control is turned off or 30 minutes without traffic.
-browse takes agent-browser's command line (snapshot, click @e1, fill @e2 "text", open URL, ...) in that profile;
+The agent_browser_* tools are agent-browser's, driving that session's tabs: agent_browser_open, then
+agent_browser_snapshot for @refs, then agent_browser_click, agent_browser_fill, ... with them.
 run takes one of Ardia's own commands (see commands). tabs lists every profile, window, pin and tab, with the ids
 run takes; it needs no session."""
 TABS_DESCRIPTION = (
@@ -70,11 +91,6 @@ TOOLS = [
         "inputSchema": schema({"events": {"type": "array", "items": STRING}, "timeout": {"type": "number", "default": 30, "maximum": EVENT_WAIT_LIMIT}, "full_urls": {"type": "boolean", "default": False}}),
     },
     {
-        "name": "browse",
-        "description": "Run one agent-browser command against the session's profile, e.g. [\"snapshot\", \"-i\"], [\"click\", \"@e3\"], [\"fill\", \"@e2\", \"hello\"], [\"open\", \"https://example.com\"]. Returns its JSON data.",
-        "inputSchema": schema({"args": {"type": "array", "items": STRING, "minItems": 1}}, ("args",)),
-    },
-    {
         "name": "history",
         "description": "The owner's recent history per URL, newest first (owner profiles only, http(s) pages). domains=true rolls it up per domain.",
         "inputSchema": schema({"days": {"type": "number", "default": 1}, "limit": {"type": "integer", "default": 200}, "profile": STRING, "domains": {"type": "boolean", "default": False}}),
@@ -90,14 +106,162 @@ class ToolError(Exception):
         self.code = code or kind
 
 
+class ChildGone(Exception):
+    pass
+
+
+def forwarded_tools(profiles: str) -> list[dict]:
+    listing = json.loads(FORWARDED_TOOLS.read_text(encoding="utf-8"))
+    wanted = set()
+    for profile in profiles.split(","):
+        if profile not in listing["profiles"]:
+            raise ValueError(f"no agent-browser tools profile {profile!r} (one of {', '.join(sorted(listing['profiles']))})")
+        wanted.update(listing["profiles"][profile])
+    tools = []
+    for tool in listing["tools"]:
+        if tool["name"] in wanted and tool["name"] not in DENIED_TOOLS:
+            input_schema = dict(tool["inputSchema"])
+            input_schema["properties"] = {k: v for k, v in input_schema.get("properties", {}).items() if k not in DROPPED_ARGUMENTS}
+            if "required" in input_schema:
+                input_schema["required"] = [k for k in input_schema["required"] if k not in DROPPED_ARGUMENTS]
+            tools.append({**tool, "inputSchema": input_schema})
+    return tools
+
+
+def refused_extra_arg(arguments: dict) -> str | None:
+    extra = arguments.get("extraArgs")
+    if not isinstance(extra, list):
+        return None
+    for arg in extra:
+        for flag in REFUSED_EXTRA_ARGS:
+            if isinstance(arg, str) and (arg == flag or arg.startswith(flag + "=")):
+                return flag
+    return None
+
+
+class AgentBrowser:
+    def __init__(self, program: str, profiles: str, env: dict, on_notification):
+        self.program = program
+        self.profiles = profiles
+        self.env = env
+        self.on_notification = on_notification
+        self.process = None
+        self.pending: dict = {}
+        self.next_id = 0
+        self.tasks: list = []
+
+    @property
+    def alive(self) -> bool:
+        return self.process is not None and self.process.returncode is None and bool(self.tasks) and not self.tasks[0].done()
+
+    async def start(self) -> None:
+        self.process = await asyncio.create_subprocess_exec(
+            self.program, "mcp", "--tools", self.profiles, "--config", str(agent_browser.CONFIG),
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            env=self.env, limit=LINE_LIMIT,
+        )
+        self.tasks = [asyncio.ensure_future(self.read()), asyncio.ensure_future(self.relay_stderr())]
+        answer = await asyncio.wait_for(self.request("initialize", {
+            "protocolVersion": PROTOCOL_VERSIONS[0], "capabilities": {}, "clientInfo": {"name": "ardia", "version": __version__},
+        }), CHILD_START_TIMEOUT)
+        if "error" in answer:
+            raise ChildGone(str(answer["error"].get("message") or answer["error"]))
+        self.write({"jsonrpc": "2.0", "method": "notifications/initialized"})
+
+    def write(self, message: dict) -> None:
+        if self.process is None or self.process.stdin.is_closing():
+            raise ChildGone("agent-browser has stopped")
+        self.process.stdin.write((json.dumps(message, separators=(",", ":")) + "\n").encode())
+
+    async def request(self, method: str, params: dict, timeout: float | None = None) -> dict:
+        self.next_id += 1
+        request_id = self.next_id
+        future = asyncio.get_running_loop().create_future()
+        self.pending[request_id] = future
+        try:
+            self.write({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
+            return await asyncio.wait_for(asyncio.shield(future), timeout)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            if self.alive:
+                try:
+                    self.write({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": request_id}})
+                except (ChildGone, OSError):
+                    pass
+            raise
+        finally:
+            self.pending.pop(request_id, None)
+
+    async def read(self) -> None:
+        try:
+            while True:
+                line = await self.process.stdout.readline()
+                if not line:
+                    break
+                try:
+                    message = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(message, dict):
+                    continue
+                if "method" not in message:
+                    future = self.pending.get(message.get("id"))
+                    if future is not None and not future.done():
+                        future.set_result(message)
+                elif "id" in message:
+                    answer = {"result": {}} if message["method"] == "ping" else {"error": {"code": -32601, "message": "not supported"}}
+                    self.write({"jsonrpc": "2.0", "id": message["id"], **answer})
+                else:
+                    self.on_notification(message)
+        except (ValueError, ConnectionError, ChildGone):
+            pass
+        finally:
+            for future in self.pending.values():
+                if not future.done():
+                    future.set_exception(ChildGone("agent-browser stopped mid-call"))
+
+    async def relay_stderr(self) -> None:
+        while True:
+            line = await self.process.stderr.readline()
+            if not line:
+                return
+            sys.stderr.write(redact("agent-browser: " + line.decode("utf-8", "replace")))
+            sys.stderr.flush()
+
+    async def stop(self) -> None:
+        process = self.process
+        if process is not None and process.returncode is None:
+            try:
+                process.stdin.close()
+                await asyncio.wait_for(process.wait(), CHILD_STOP_WAIT)
+            except (asyncio.TimeoutError, OSError):
+                for signal_name in ("terminate", "kill"):
+                    try:
+                        getattr(process, signal_name)()
+                        await asyncio.wait_for(process.wait(), CHILD_STOP_WAIT)
+                        break
+                    except ProcessLookupError:
+                        break
+                    except asyncio.TimeoutError:
+                        continue
+        for task in self.tasks:
+            task.cancel()
+        await asyncio.gather(*self.tasks, return_exceptions=True)
+        await asyncio.to_thread(agent_browser.stop_daemon, self.env)
+
+
 class Server:
-    def __init__(self, ardia: Ardia, out):
+    def __init__(self, ardia: Ardia, out, profiles: str = "core"):
         self.ardia = ardia
         self.out = out
         self.client = None
         self.owned = None
         self.running: dict = {}
         self.write_lock = threading.Lock()
+        self.profiles = profiles
+        self.forwarded = forwarded_tools(profiles)
+        self.tools = TOOLS + self.forwarded
+        self.child: AgentBrowser | None = None
+        self.child_lock = asyncio.Lock()
 
     def send(self, message: dict) -> None:
         line = redact(json.dumps(message, ensure_ascii=False, separators=(",", ":"), default=str))
@@ -110,21 +274,112 @@ class Server:
 
     async def serve(self, reader) -> None:
         loop = asyncio.get_running_loop()
-        while True:
-            line = await loop.run_in_executor(None, reader.readline)
-            if not line:
-                break
+        current = asyncio.current_task()
+        for signum in (signal.SIGTERM, signal.SIGHUP):
+            loop.add_signal_handler(signum, current.cancel)
+        lines: asyncio.Queue = asyncio.Queue()
+
+        def read_lines() -> None:
+            for line in iter(reader.readline, ""):
+                loop.call_soon_threadsafe(lines.put_nowait, line)
+            loop.call_soon_threadsafe(lines.put_nowait, "")
+
+        threading.Thread(target=read_lines, daemon=True).start()
+        try:
+            while True:
+                line = await lines.get()
+                if not line:
+                    break
+                try:
+                    message = json.loads(line)
+                except ValueError:
+                    self.reply(None, error={"code": -32700, "message": "parse error"})
+                    continue
+                if isinstance(message, dict):
+                    self.handle(message)
+        finally:
+            for task in list(self.running.values()):
+                task.cancel()
+            await asyncio.gather(*self.running.values(), return_exceptions=True)
+            await self.stop_child()
+            await self.end_owned_session()
+
+    async def stop_child(self) -> None:
+        child, self.child = self.child, None
+        if child is not None:
+            await child.stop()
+
+    def child_notification(self, message: dict) -> None:
+        if message.get("method") == "notifications/progress":
+            self.send(message)
+
+    async def started_child(self) -> AgentBrowser:
+        async with self.child_lock:
+            if self.child is not None and self.child.alive:
+                return self.child
+            await self.stop_child()
+            session = self.ardia.session
+            add_secret(session)
             try:
-                message = json.loads(line)
-            except ValueError:
-                self.reply(None, error={"code": -32700, "message": "parse error"})
-                continue
-            if isinstance(message, dict):
-                self.handle(message)
-        for task in list(self.running.values()):
-            task.cancel()
-        await asyncio.gather(*self.running.values(), return_exceptions=True)
-        await self.end_owned_session()
+                program = agent_browser.binary()
+                found = endpoint.from_control_file(endpoint.control_path(self.ardia.root), session)
+            except agent_browser.Missing as error:
+                raise ToolError("error", str(error), "agent_browser_missing") from None
+            except endpoint.EndpointError as error:
+                raise ToolError("unreachable", str(error)) from None
+            child = AgentBrowser(program, self.profiles, agent_browser.environment(found.ws, session), self.child_notification)
+            try:
+                await child.start()
+            except (OSError, ChildGone, asyncio.TimeoutError) as error:
+                await child.stop()
+                raise ToolError("error", f"agent-browser didn't start ({type(error).__name__}: {error})", "agent_browser") from None
+            self.child = child
+            return child
+
+    async def session_ended(self) -> bool:
+        try:
+            found = endpoint.from_control_file(endpoint.control_path(self.ardia.root), self.ardia.session)
+        except endpoint.EndpointError:
+            return True
+        return await asyncio.to_thread(endpoint.session_gone, found)
+
+    async def forward(self, request_id, spec: dict, arguments: dict, meta: dict) -> None:
+        unknown = sorted(set(arguments) - set(spec["inputSchema"].get("properties", {})))
+        if unknown:
+            self.reply(request_id, error={"code": -32602, "message": f"{spec['name']}: unknown argument {unknown[0]}"})
+            return
+        try:
+            self.require_session()
+            flag = refused_extra_arg(arguments)
+            if flag:
+                raise ToolError("refused", f"extraArgs can't carry {flag}: the agent-browser tools always drive this session", "refused_argument")
+            child = await self.started_child()
+            timeout = arguments.get("timeoutMs") if isinstance(arguments.get("timeoutMs"), int) else DEFAULT_CALL_TIMEOUT_MS
+            params = {"name": spec["name"], "arguments": arguments, **({"_meta": meta} if meta else {})}
+            try:
+                answer = await child.request("tools/call", params, timeout / 1000 + CHILD_CALL_SLACK)
+            except (ChildGone, asyncio.TimeoutError) as error:
+                if await self.session_ended():
+                    await self.stop_child()
+                    raise ToolError("session", endpoint.SESSION_ENDED) from None
+                if isinstance(error, asyncio.TimeoutError):
+                    await self.stop_child()
+                    raise ToolError("error", f"agent-browser didn't answer {spec['name']}; it has been stopped and the next call starts it again", "agent_browser") from None
+                raise ToolError("error", f"{error}; the next call starts it again", "agent_browser") from None
+        except asyncio.CancelledError:
+            return
+        except ToolError as error:
+            self.reply(request_id, failure(error.kind, error.code, error.message))
+            return
+        if "error" in answer:
+            self.reply(request_id, error=answer["error"])
+            return
+        result = answer.get("result") if isinstance(answer.get("result"), dict) else {}
+        if result.get("isError") and await self.session_ended():
+            await self.stop_child()
+            self.reply(request_id, failure("session", "session", endpoint.SESSION_ENDED))
+            return
+        self.reply(request_id, result)
 
     async def end_owned_session(self) -> None:
         owned, self.owned = self.owned, None
@@ -158,7 +413,7 @@ class Server:
         elif method == "ping":
             self.reply(request_id, {})
         elif method == "tools/list":
-            self.reply(request_id, {"tools": TOOLS})
+            self.reply(request_id, {"tools": self.tools})
         elif method == "tools/call":
             task = asyncio.ensure_future(self.call(request_id, params))
             self.running[request_id] = task
@@ -170,9 +425,12 @@ class Server:
         name = params.get("name")
         arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
         meta = params.get("_meta") if isinstance(params.get("_meta"), dict) else {}
-        spec = next((t for t in TOOLS if t["name"] == name), None)
+        spec = next((t for t in self.tools if t["name"] == name), None)
         if spec is None:
             self.reply(request_id, error={"code": -32602, "message": f"no tool {name}"})
+            return
+        if spec in self.forwarded:
+            await self.forward(request_id, spec, arguments, meta)
             return
         problem = argument_problem(spec["inputSchema"], arguments)
         if problem:
@@ -220,6 +478,8 @@ class Server:
             cancelled.set()
             await asyncio.gather(work, return_exceptions=True)
             raise
+        if self.child is not None and self.child.env.get("AGENT_BROWSER_SESSION") != agent_browser.session_name(answer["session"]):
+            await self.stop_child()
         if self.owned != answer["session"]:
             await self.end_owned_session()
         self.owned = answer["session"]
@@ -227,6 +487,7 @@ class Server:
 
     async def tool_disconnect(self, _token):
         self.require_session()
+        await self.stop_child()
         await asyncio.to_thread(self.ardia.disconnect)
         self.ardia.session = self.owned = None
         return {"disconnected": True}
@@ -261,27 +522,6 @@ class Server:
         finally:
             await stream.aclose()
 
-    async def tool_browse(self, _token, args: list):
-        self.require_session()
-        if not args:
-            raise ToolError("refused", "give a command, like [\"snapshot\"]", "bad_request")
-        env = dict(os.environ, ARDIA_SESSION=self.ardia.session)
-        if self.ardia.root is not None:
-            env["ARDIA_DATA_DIR"] = str(self.ardia.root)
-        package_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        code = f"import sys; sys.path.insert(0, {package_parent!r}); from ardia_cli.cli import main; sys.exit(main(sys.argv[1:]))"
-        process = await asyncio.create_subprocess_exec(
-            sys.executable, "-I", "-c", code, "browse", "--json", *args,
-            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env,
-        )
-        try:
-            out, err = await asyncio.wait_for(process.communicate(), BROWSE_TIMEOUT)
-        except (asyncio.CancelledError, asyncio.TimeoutError):
-            process.terminate()
-            await process.wait()
-            raise
-        return browse_answer(process.returncode, out.decode("utf-8", "replace"), err.decode("utf-8", "replace"))
-
     async def tool_history(self, _token, days: float = 1, limit: int = 200, profile: str | None = None, domains: bool = False):
         return {"history": await self.ardia.history(days, limit, profile, domains)}
 
@@ -310,28 +550,6 @@ def argument_problem(input_schema: dict, arguments: dict) -> str | None:
     return None
 
 
-def browse_answer(status: int, out: str, err: str):
-    try:
-        answer = json.loads(out)
-    except ValueError:
-        answer = None
-    if isinstance(answer, list):
-        return {"batch": answer}
-    if isinstance(answer, dict) and "success" in answer:
-        if answer.get("success"):
-            return answer.get("data")
-        message = str(answer.get("error") or err.strip() or f"ardia browse exited {status}")
-        if status == 6:
-            raise SessionGone(message)
-        raise ToolError("unreachable" if status == 2 else "browse", message, answer.get("code"))
-    detail = (err.strip() or out.strip() or f"ardia browse exited {status}").splitlines()[-1]
-    if status == 6:
-        raise SessionGone(detail)
-    if status == 2:
-        raise Unreachable(detail)
-    raise ToolError("browse", detail)
-
-
 def success(data) -> dict:
     return {"content": [{"type": "text", "text": json.dumps(data, ensure_ascii=False, default=str)}]}
 
@@ -344,7 +562,7 @@ def failure(kind: str, code: str, message: str) -> dict:
     }
 
 
-def main(data_dir: str | None = None, session: str | None = None) -> int:
+def main(data_dir: str | None = None, session: str | None = None, tools: str = "core") -> int:
     from ardia_cli.endpoint import SESSION_EXIT, SessionError, session_id
 
     out = sys.stdout
@@ -354,9 +572,15 @@ def main(data_dir: str | None = None, session: str | None = None) -> int:
     except SessionError as error:
         sys.stderr.write(f"ardia mcp: {error}\n")
         return SESSION_EXIT
-    server = Server(Ardia.at(data_dir, token), out)
+    try:
+        server = Server(Ardia.at(data_dir, token), out, tools)
+    except ValueError as error:
+        sys.stderr.write(f"ardia mcp: {error}\n")
+        return 64
     try:
         asyncio.run(server.serve(sys.stdin))
     except KeyboardInterrupt:
         return 130
+    except asyncio.CancelledError:
+        return 143
     return 0

@@ -1,12 +1,14 @@
 #!/bin/sh
-# Builds the ardia CLI tarball: a relocatable CPython 3.13 with ardia_cli, its pinned dependencies, esbuild and axe-core.
+# Builds the ardia CLI tarball: a relocatable CPython 3.13 with ardia_cli, its pinned dependencies, esbuild and agent-browser.
 #
 #   apps/cli/scripts/build.sh <version> <out dir>
 #   apps/cli/scripts/build.sh -h | --help
 #
 # Writes <out dir>/ardia-cli-<version>-macos-arm64.tar.gz and its .sha256. Needs the network (python-build-standalone
-# from GitHub, wheels, esbuild and axe-core from npm) and uv (~/.local/bin/uv or on PATH). The Python, esbuild and axe-core
-# downloads are pinned by sha256 (the npm ones also by npm's sha512 integrity) and cached in ~/Library/Caches/ardia-cli-build.
+# from GitHub, wheels, esbuild and agent-browser from npm) and uv (~/.local/bin/uv or on PATH). The Python, esbuild and
+# agent-browser downloads are pinned by sha256 (the npm ones also by npm's sha512 integrity) and cached in
+# ~/Library/Caches/ardia-cli-build. ardia_cli/agent_browser_tools.json has to match the pinned agent-browser:
+# after changing the pin, regenerate it with scripts/agent-browser-tools.py <the new binary>.
 set -eu
 
 python_release=20261013
@@ -19,11 +21,11 @@ esbuild_sha256=1980cde09749094452b20d36ff267585ccb3f72749c7bc97291cd9996ccf5a2a
 esbuild_sha512=n4KqkOQrraxHJcgjM1RvwbigfQKIKJVpM7xp+KsxiyUSrRdIXnt73VhrPAx0fV44hgfmIVKjxMN9J1t5jySVkw==
 esbuild_asset=esbuild-darwin-arm64-$esbuild_version.tgz
 esbuild_url=https://registry.npmjs.org/@esbuild/darwin-arm64/-/darwin-arm64-$esbuild_version.tgz
-axe_version=4.10.3
-axe_sha256=0f2b4d7dcdf7d1219df8d1959ad68e565f51d14c3f0d88bb71cd59abeb956292
-axe_sha512=Xm7bpRXnDSX2YE2YFfBk2FnF0ep6tmG7xPh8iHee8MIcrgq762Nkce856dYtJYLkuIoYZvGfTs/PbZhideTcEg==
-axe_asset=axe-core-$axe_version.tgz
-axe_url=https://registry.npmjs.org/axe-core/-/$axe_asset
+agent_browser_version=0.41.2
+agent_browser_sha256=f0d26595c766e54eedcd44324b67fb93b73fd003bd05237414b2513e75444bb0
+agent_browser_sha512=/agCKB5rw1EEK8SKWo4zid7a5kOwlclqALC0P3c69buJvKdhrl/dJkKdfLqGGaiNIbWzRdqqT0PxZVkwVEf2fg==
+agent_browser_asset=agent-browser-$agent_browser_version.tgz
+agent_browser_url=https://registry.npmjs.org/agent-browser/-/$agent_browser_asset
 
 case ${1:-} in
   -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; exit 0 ;;
@@ -56,14 +58,14 @@ actual=$(shasum -a 256 "$cache/$esbuild_asset" | awk '{ print $1 }')
 [ "$actual" = "$esbuild_sha256" ] || { echo "build.sh: $esbuild_asset checksum mismatch ($actual)" >&2; exit 1; }
 actual=$(openssl dgst -sha512 -binary "$cache/$esbuild_asset" | base64)
 [ "$actual" = "$esbuild_sha512" ] || { echo "build.sh: $esbuild_asset sha512 mismatch ($actual)" >&2; exit 1; }
-if ! [ -f "$cache/$axe_asset" ] || [ "$(shasum -a 256 "$cache/$axe_asset" | awk '{ print $1 }')" != "$axe_sha256" ]; then
-  curl -fsSL --proto =https -o "$cache/$axe_asset.part" "$axe_url"
-  mv "$cache/$axe_asset.part" "$cache/$axe_asset"
+if ! [ -f "$cache/$agent_browser_asset" ] || [ "$(shasum -a 256 "$cache/$agent_browser_asset" | awk '{ print $1 }')" != "$agent_browser_sha256" ]; then
+  curl -fsSL --proto =https -o "$cache/$agent_browser_asset.part" "$agent_browser_url"
+  mv "$cache/$agent_browser_asset.part" "$cache/$agent_browser_asset"
 fi
-actual=$(shasum -a 256 "$cache/$axe_asset" | awk '{ print $1 }')
-[ "$actual" = "$axe_sha256" ] || { echo "build.sh: $axe_asset checksum mismatch ($actual)" >&2; exit 1; }
-actual=$(openssl dgst -sha512 -binary "$cache/$axe_asset" | base64)
-[ "$actual" = "$axe_sha512" ] || { echo "build.sh: $axe_asset sha512 mismatch ($actual)" >&2; exit 1; }
+actual=$(shasum -a 256 "$cache/$agent_browser_asset" | awk '{ print $1 }')
+[ "$actual" = "$agent_browser_sha256" ] || { echo "build.sh: $agent_browser_asset checksum mismatch ($actual)" >&2; exit 1; }
+actual=$(openssl dgst -sha512 -binary "$cache/$agent_browser_asset" | base64)
+[ "$actual" = "$agent_browser_sha512" ] || { echo "build.sh: $agent_browser_asset sha512 mismatch ($actual)" >&2; exit 1; }
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/ardia-cli-build.XXXXXX")
 trap 'rm -rf "$work"' EXIT
@@ -78,18 +80,27 @@ site=$lib/site-packages
 UV_CACHE_DIR=$cache/uv "$uv" pip install --quiet --python "$python" --break-system-packages --link-mode copy \
   --no-build --require-hashes -r "$cli_dir/requirements.lock"
 cp -R "$cli_dir/ardia_cli" "$site/ardia_cli"
+rm -rf "$site/ardia_cli/bin" "$site/ardia_cli/skill-data"
 printf '__version__ = "%s"\n' "$version" >"$site/ardia_cli/__init__.py"
 mkdir "$work/esbuild" "$site/ardia_cli/bin"
 tar -xzf "$cache/$esbuild_asset" -C "$work/esbuild" package/bin/esbuild
 cp "$work/esbuild/package/bin/esbuild" "$site/ardia_cli/bin/esbuild"
 chmod 755 "$site/ardia_cli/bin/esbuild"
 rm -rf "$work/esbuild"
-mkdir "$work/axe" "$site/ardia_cli/vendor"
-tar -xzf "$cache/$axe_asset" -C "$work/axe" package/axe.min.js package/LICENSE
-cp "$work/axe/package/axe.min.js" "$site/ardia_cli/vendor/axe.min.js"
-cp "$work/axe/package/LICENSE" "$site/ardia_cli/vendor/axe-core-LICENSE"
-rm -rf "$work/axe"
+mkdir "$work/agent-browser"
+tar -xzf "$cache/$agent_browser_asset" -C "$work/agent-browser" package/bin/agent-browser-darwin-arm64 package/LICENSE package/skill-data
+cp "$work/agent-browser/package/bin/agent-browser-darwin-arm64" "$site/ardia_cli/bin/agent-browser"
+cp "$work/agent-browser/package/LICENSE" "$site/ardia_cli/bin/agent-browser-LICENSE"
+cp -R "$work/agent-browser/package/skill-data" "$site/ardia_cli/skill-data"
+chmod 755 "$site/ardia_cli/bin/agent-browser"
+rm -rf "$work/agent-browser"
 [ "$("$site/ardia_cli/bin/esbuild" --version)" = "$esbuild_version" ] || { echo "build.sh: the bundled esbuild doesn't run" >&2; exit 1; }
+[ "$("$site/ardia_cli/bin/agent-browser" --version)" = "agent-browser $agent_browser_version" ] \
+  || { echo "build.sh: the bundled agent-browser doesn't run or isn't $agent_browser_version" >&2; exit 1; }
+"$python" -I "$cli_dir/scripts/agent-browser-tools.py" "$site/ardia_cli/bin/agent-browser" "$work/agent_browser_tools.json"
+cmp -s "$work/agent_browser_tools.json" "$cli_dir/ardia_cli/agent_browser_tools.json" \
+  || { echo "build.sh: ardia_cli/agent_browser_tools.json doesn't match agent-browser $agent_browser_version: run scripts/agent-browser-tools.py" >&2; exit 1; }
+rm -f "$work/agent_browser_tools.json"
 
 rm -rf "$lib/test" "$lib/idlelib" "$lib/tkinter" "$lib/turtledemo" "$lib/ensurepip" "$lib/lib2to3" \
   "$lib/turtle.py" "$lib/pydoc_data" "$lib"/config-* "$lib/lib-dynload"/_tkinter* \
@@ -107,7 +118,7 @@ find "$root" -type l | while IFS= read -r link; do
     /*|..|../*|*/../*|*/..) rm -f "$link" ;;
   esac
 done
-"$python" -I -c 'import ardia_cli.cli, ardia_cli.browse.cli, ardia_cli.browse.daemon, ardia_cli.scripts_cli, ardia_cli.scripts_test, ardia_cli.scripts_store, ardia_cli.browsing, pydoll, sqlite3, ssl, zoneinfo, ctypes, lzma; from ardia_cli.userscript import find_esbuild; assert find_esbuild().endswith("ardia_cli/bin/esbuild"); from ardia_cli.browse.audit import axe_source; assert "axe" in axe_source()[:4000]' >/dev/null
+env -u ARDIA_AGENT_BROWSER "$python" -I -c 'import ardia_cli.cli, ardia_cli.mcp, ardia_cli.agent_browser, ardia_cli.scripts_cli, ardia_cli.scripts_test, ardia_cli.scripts_store, ardia_cli.browsing, pydoll, sqlite3, ssl, zoneinfo, ctypes, lzma; from ardia_cli.userscript import find_esbuild; assert find_esbuild().endswith("ardia_cli/bin/esbuild"); from ardia_cli.agent_browser import binary; assert binary().endswith("ardia_cli/bin/agent-browser"); from ardia_cli.mcp import forwarded_tools; assert forwarded_tools("all")' >/dev/null
 
 cat >"$root/bin/ardia" <<'EOF'
 #!/bin/sh

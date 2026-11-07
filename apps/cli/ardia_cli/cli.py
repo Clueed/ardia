@@ -7,7 +7,8 @@ Control a running Ardia from the terminal.
 
 Connect first: ardia connect --new NAME makes a profile of your own (no prompt); ardia connect NAME uses an
 existing one once the owner allows it. Either prints a session id: pass it as --session ID (or $ARDIA_SESSION)
-to exec, run, scripts test, rename and disconnect, and as --ardia-session ID (or $ARDIA_SESSION) to browse.
+to exec, run, scripts test, rename and disconnect, and as --ardia-session ID (or $ARDIA_SESSION) to browse,
+which runs the bundled agent-browser against the session (ardia browse --help is agent-browser's).
 """
 CONNECT_DESCRIPTION = """\
 Connect to a profile and print the session id (only that, on stdout; a JSON object with --json).
@@ -70,18 +71,21 @@ Endpoint: --ws, else --port (plain DevTools servers only), else $ARDIA_CDP_URL, 
 """
 MCP_DESCRIPTION = """\
 Serve Ardia to an MCP client over stdio: the same calls as the ardia command, as MCP tools (connect, disconnect,
-rename, run, commands, tabs, wait_for_event, browse, history). exec isn't one.
+rename, run, commands, tabs, wait_for_event, history), plus the bundled agent-browser's tools (agent_browser_open,
+agent_browser_snapshot, agent_browser_click, ...), which drive the session's tabs. exec isn't one.
 
 The server keeps the session: the client calls connect (or the server starts with --session ID or $ARDIA_SESSION),
-and no tool ever returns the token. The agent name the owner sees is connect's agent, else $ARDIA_AGENT, else the
-client's name.
+and no tool ever returns the token. agent-browser starts on the first agent_browser_* call after connect and stops
+on disconnect, when the session ends and when the server exits. The agent name the owner sees is connect's agent,
+else $ARDIA_AGENT, else the client's name.
 
 Add it to a client, for example:
   claude mcp add ardia -- ardia mcp
   codex mcp add ardia -- ardia mcp
 """
 SKILLS_DESCRIPTION = """\
-Install the ardia agent skill (SKILL.md and a pydoll reference) so coding agents know how to drive Ardia.
+Install the ardia agent skill (SKILL.md, a note on agent-browser in Ardia and a pydoll reference) so coding agents
+know how to drive Ardia.
 
 Targets and where they install (user level; --project uses the current directory):
   general       ~/.agents/skills            ./.agents/skills
@@ -135,6 +139,7 @@ def build_parser():
     mcp = commands.add_parser("mcp", help="serve Ardia to an MCP client over stdio", description=MCP_DESCRIPTION, formatter_class=argparse.RawDescriptionHelpFormatter)
     mcp.add_argument("--session", metavar="ID", help="start with this session from ardia connect (default: $ARDIA_SESSION, else none until connect)")
     mcp.add_argument("--data-dir", metavar="DIR", help=data_help)
+    mcp.add_argument("--tools", metavar="PROFILES", default="core", help="agent-browser's tool profiles to forward, comma-separated: core (default), network, state, debug, tabs, react, mobile or all")
 
     skills = commands.add_parser("skills", help="install the ardia agent skill")
     skill_commands = skills.add_subparsers(dest="skills_command", metavar="<command>")
@@ -160,14 +165,14 @@ def build_parser():
     from ardia_cli import automation_cli
 
     automation_cli.add_parsers(commands, argparse.RawDescriptionHelpFormatter)
-    commands.add_parser("browse", help="agent-browser's commands against the running Ardia (ardia browse --help)", add_help=False)
+    commands.add_parser("browse", help="the bundled agent-browser, driving the connected session (ardia browse --help)", add_help=False)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["browse"]:
-        from ardia_cli.browse.cli import main as browse_main
+        from ardia_cli.agent_browser import main as browse_main
 
         return browse_main(argv[1:])
     if argv == ["--version"]:
@@ -186,7 +191,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "mcp":
         from ardia_cli import mcp
 
-        return mcp.main(args.data_dir, args.session)
+        return mcp.main(args.data_dir, args.session, args.tools)
     if args.command == "skills":
         if args.skills_command != "install":
             parser.parse_args(["skills", "--help"])

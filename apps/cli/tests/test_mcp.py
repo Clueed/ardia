@@ -80,8 +80,12 @@ class Mcp(Base):
     def test_lists_its_tools_with_schemas(self):
         client = self.client()
         tools = client.ask("tools/list")["result"]["tools"]
-        self.assertEqual([t["name"] for t in tools], [t["name"] for t in mcp.TOOLS])
+        listing = json.loads(mcp.FORWARDED_TOOLS.read_text())
+        forwarded = [name for name in listing["profiles"]["core"] if name not in mcp.DENIED_TOOLS]
+        self.assertEqual([t["name"] for t in tools], [t["name"] for t in mcp.TOOLS] + forwarded)
+        self.assertIn("agent_browser_snapshot", forwarded)
         self.assertNotIn("exec", [t["name"] for t in tools])
+        self.assertNotIn("browse", [t["name"] for t in tools])
         for tool in tools:
             self.assertEqual(tool["inputSchema"]["type"], "object")
         self.assertEqual(client.ask("ping")["result"], {})
@@ -91,7 +95,7 @@ class Mcp(Base):
     def test_session_tools_ask_for_connect_first(self):
         self.serve(lambda path, params: (200, {}))
         client = self.client()
-        for name, arguments in (("run", {"command": "newTab"}), ("browse", {"args": ["snapshot"]}), ("disconnect", {}), ("rename", {"name": "x"})):
+        for name, arguments in (("run", {"command": "newTab"}), ("agent_browser_snapshot", {}), ("agent_browser_open", {"url": "https://example.com"}), ("disconnect", {}), ("rename", {"name": "x"})):
             with self.subTest(tool=name):
                 result = client.tool(name, arguments)
                 self.assertTrue(result["isError"])
@@ -190,22 +194,156 @@ class Mcp(Base):
         result = client.tool("wait_for_event", {"events": ["tab.nope"]})
         self.assertEqual(result["structuredContent"]["code"], "unknown_event")
 
+    def test_the_deny_list_holds_for_every_profile(self):
+        client = self.client("--tools", "all")
+        names = [t["name"] for t in client.ask("tools/list")["result"]["tools"]]
+        listing = json.loads(mcp.FORWARDED_TOOLS.read_text())
+        self.assertEqual(len(names), len(mcp.TOOLS) + len(set(listing["profiles"]["all"]) - mcp.DENIED_TOOLS))
+        for denied in ("agent_browser_install", "agent_browser_upgrade", "agent_browser_doctor", "agent_browser_connect",
+                       "agent_browser_dashboard_start", "agent_browser_chat", "agent_browser_confirm", "agent_browser_deny",
+                       "agent_browser_profiles", "agent_browser_skills_get", "agent_browser_tools_profiles", "agent_browser_get_cdp_url"):
+            self.assertIn(denied, listing["profiles"]["all"])
+            self.assertNotIn(denied, names)
+        self.assertTrue(mcp.DENIED_TOOLS <= set(listing["profiles"]["all"]))
+        for tool in client.ask("tools/list")["result"]["tools"]:
+            self.assertFalse(mcp.DROPPED_ARGUMENTS & set(tool["inputSchema"].get("properties", {})), tool["name"])
 
-class BrowseAnswer(unittest.TestCase):
-    def test_data_on_success(self):
-        self.assertEqual(mcp.browse_answer(0, json.dumps({"success": True, "data": {"title": "x"}, "error": None}), ""), {"title": "x"})
+    def test_an_unknown_tools_profile_stops_the_server(self):
+        done = subprocess.run([sys.executable, "-m", "ardia_cli", "mcp", "--tools", "core,nope"], cwd=CLI_DIR, input="",
+                              capture_output=True, text=True, timeout=WAIT, env=dict(os.environ, ARDIA_DATA_DIR=str(self.root)))
+        self.assertEqual(done.returncode, 64)
+        self.assertIn("nope", done.stderr)
 
-    def test_failure_keeps_the_code(self):
-        with self.assertRaises(mcp.ToolError) as caught:
-            mcp.browse_answer(1, json.dumps({"success": False, "data": None, "error": "Stale ref @e1", "code": "stale_ref"}), "")
-        self.assertEqual((caught.exception.kind, caught.exception.code, caught.exception.message), ("browse", "stale_ref", "Stale ref @e1"))
 
-    def test_batch_is_a_list(self):
-        self.assertEqual(mcp.browse_answer(0, json.dumps([{"command": ["title"], "success": True}]), ""), {"batch": [{"command": ["title"], "success": True}]})
+FAKE_AGENT_BROWSER = """\
+import json, os, sys
+record = os.environ["FAKE_RECORD"]
+with open(record, "a") as handle:
+    handle.write(json.dumps({"pid": os.getpid(), "argv": sys.argv[1:], "env": dict(os.environ)}) + "\\n")
+for line in sys.stdin:
+    message = json.loads(line)
+    method = message.get("method")
+    if "id" not in message:
+        continue
+    if method == "initialize":
+        result = {"protocolVersion": message["params"]["protocolVersion"], "capabilities": {"tools": {}}, "serverInfo": {"name": "fake", "version": "0"}}
+    elif method == "tools/call":
+        params = message["params"]
+        token = params.get("_meta", {}).get("progressToken")
+        if token is not None:
+            print(json.dumps({"jsonrpc": "2.0", "method": "notifications/progress", "params": {"progressToken": token, "progress": 1}}), flush=True)
+        if params["name"] == "agent_browser_eval":
+            os._exit(1)
+        failed = params["name"] == "agent_browser_click"
+        text = "clicked nothing" if failed else "page at " + os.environ["AGENT_BROWSER_CDP"]
+        result = {"content": [{"type": "text", "text": text}], "isError": failed}
+    else:
+        print(json.dumps({"jsonrpc": "2.0", "id": message["id"], "error": {"code": -32601, "message": "no"}}), flush=True)
+        continue
+    print(json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}), flush=True)
+"""
 
-    def test_session_exit_without_json(self):
-        with self.assertRaises(mcp.SessionGone):
-            mcp.browse_answer(6, "", "ardia browse: That session has ended\n")
+
+class Forwarding(Base):
+    client = Mcp.client
+
+    def setUp(self):
+        super().setUp()
+        self.record = self.root / "children.jsonl"
+        self.program = self.root / "agent-browser"
+        self.program.write_text("#!" + sys.executable + "\n" + FAKE_AGENT_BROWSER)
+        self.program.chmod(0o755)
+        self.alive = True
+
+        def respond(path, params):
+            if path == "/ardia/disconnect":
+                return 200, {}
+            if path == "/ardia/active":
+                return (200, {"targetId": "T1"}) if self.alive and params.get("token") == SESSION_TOKEN else (404, {"error": "not-found"})
+            return connect_server([{"state": "allowed", "session": SESSION_TOKEN, "profile": "Scout", "kind": "agent"}])(path, params)
+
+        self.fake = self.serve(respond)
+
+    def connected(self) -> McpClient:
+        client = self.client(env={"ARDIA_AGENT_BROWSER": str(self.program), "FAKE_RECORD": str(self.record)})
+        client.tool("connect", {"name": "Scout", "new": True})
+        return client
+
+    def children(self) -> list[dict]:
+        return [json.loads(line) for line in self.record.read_text().splitlines()] if self.record.exists() else []
+
+    def wait_gone(self, pid: int) -> None:
+        import time
+
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.05)
+        self.fail(f"agent-browser {pid} still runs")
+
+    def test_starts_on_the_first_call_with_the_session_in_its_environment(self):
+        import hashlib
+
+        client = self.connected()
+        self.assertEqual(self.children(), [])
+        notes: list = []
+        answer = client.ask("tools/call", {"name": "agent_browser_snapshot", "arguments": {"interactive": True}, "_meta": {"progressToken": "p9"}}, notes)
+        result = answer["result"]
+        self.assertFalse(result["isError"])
+        self.assertEqual(result["content"][0]["text"], f"page at ws://127.0.0.1:{self.fake.port}/devtools/browser/abc?token=***")
+        self.assertEqual([n["params"]["progressToken"] for n in notes if n.get("method") == "notifications/progress"], ["p9"])
+        [child] = self.children()
+        self.assertEqual(child["argv"], ["mcp", "--tools", "core", "--config", str(CLI_DIR / "ardia_cli" / "agent-browser.json")])
+        self.assertNotIn(SESSION_TOKEN, json.dumps(child["argv"]))
+        env = child["env"]
+        self.assertEqual(env["AGENT_BROWSER_CDP"], f"ws://127.0.0.1:{self.fake.port}/devtools/browser/abc?token={SESSION_TOKEN}")
+        self.assertEqual(env["AGENT_BROWSER_SESSION"], hashlib.sha256(SESSION_TOKEN.encode()).hexdigest()[:16])
+        self.assertEqual(env["AGENT_BROWSER_NO_VERSION_CHECK"], "1")
+        client.tool("agent_browser_get_url")
+        self.assertEqual(len(self.children()), 1)
+        self.assertEqual(json.loads(client.tool("disconnect")["content"][0]["text"]), {"disconnected": True})
+        self.wait_gone(child["pid"])
+        after = client.tool("agent_browser_get_url")
+        self.assertEqual(after["structuredContent"]["error"], "session")
+        self.assertIn("call connect first", after["content"][0]["text"])
+        client.close()
+        self.assertFalse(any(SESSION_TOKEN in line or CONTROL_TOKEN in line for line in client.raw))
+
+    def test_it_stops_when_the_server_exits(self):
+        client = self.connected()
+        client.tool("agent_browser_get_url")
+        [child] = self.children()
+        client.close()
+        self.wait_gone(child["pid"])
+
+    def test_a_dead_child_errors_once_and_restarts(self):
+        client = self.connected()
+        died = client.tool("agent_browser_eval", {"script": "1"})
+        self.assertTrue(died["isError"])
+        self.assertEqual(died["structuredContent"]["code"], "agent_browser")
+        self.assertFalse(client.tool("agent_browser_get_url")["isError"])
+        self.assertEqual(len(self.children()), 2)
+
+    def test_errors_after_the_session_ended_say_so(self):
+        client = self.connected()
+        self.assertEqual(client.tool("agent_browser_click", {"selector": "@e1"})["content"][0]["text"], "clicked nothing")
+        self.alive = False
+        ended = client.tool("agent_browser_click", {"selector": "@e1"})
+        self.assertEqual(ended["structuredContent"]["error"], "session")
+        self.assertIn("has ended", ended["structuredContent"]["message"])
+        self.wait_gone(self.children()[0]["pid"])
+
+    def test_arguments_that_move_it_are_refused(self):
+        client = self.connected()
+        for extra in (["--cdp", "ws://elsewhere:1/devtools/browser/x"], ["--config", "x.json"], ["--auto-connect"], ["--session=other"]):
+            with self.subTest(extra=extra):
+                refused = client.tool("agent_browser_snapshot", {"extraArgs": extra})
+                self.assertEqual(refused["structuredContent"]["code"], "refused_argument")
+        self.assertEqual(client.ask("tools/call", {"name": "agent_browser_snapshot", "arguments": {"session": "x"}})["error"]["code"], -32602)
+        self.assertEqual(self.children(), [])
 
 
 if __name__ == "__main__":
