@@ -35,11 +35,6 @@ STRING = {"type": "string"}
 ID = {"type": ["integer", "string"]}
 TOOLS = [
     {
-        "name": "profiles",
-        "description": "List Ardia's profiles: name, kind (real: the owner's; agent: made by connect with new=true) and connected sessions.",
-        "inputSchema": schema(),
-    },
-    {
         "name": "connect",
         "description": "Connect to a profile; the session is kept by this server and never shown. new=true makes an agent profile named NAME with no prompt; otherwise NAME is an existing profile and the owner has to allow it in Ardia (up to 120 s).",
         "inputSchema": schema({"name": STRING, "new": {"type": "boolean", "default": False}, "agent": {**STRING, "description": "who is asking, shown to the owner (default: this MCP client's name)"}}, ("name",)),
@@ -206,9 +201,6 @@ class Server:
     def require_session(self) -> None:
         if self.ardia.session is None:
             raise ToolError("session", NO_SESSION)
-
-    async def tool_profiles(self, _token):
-        return {"profiles": await asyncio.to_thread(self.ardia.profiles)}
 
     async def tool_connect(self, token, name: str, new: bool = False, agent: str | None = None):
         cancelled = threading.Event()

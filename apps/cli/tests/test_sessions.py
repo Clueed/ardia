@@ -225,18 +225,6 @@ class Connect(Base):
         self.assertEqual(self.run_cli("connect", "a", "--new", "b")[0], 1)
 
 
-class Profiles(Base):
-    def test_lists(self):
-        listed = [{"name": "Work", "kind": "real", "connected": 0}, {"name": "LinkedIn", "kind": "agent", "connected": 2}]
-        fake = self.serve(lambda path, params: (200, {"profiles": listed}) if path == "/ardia/profiles" else (404, {}))
-        status, out, _ = self.run_cli("profiles")
-        self.assertEqual(status, 0)
-        self.assertEqual(out, "Work (real)\nLinkedIn (agent, 2 connected)\n")
-        status, out, _ = self.run_cli("profiles", "--json")
-        self.assertEqual(json.loads(out), {"profiles": listed})
-        self.assertEqual(fake.routes("/ardia/profiles")[0], {"token": CONTROL_TOKEN})
-
-
 class Sessions(Base):
     def session_server(self, rename_error=None):
         def respond(path, params):

@@ -12,7 +12,7 @@ EXPIRED_EXIT = 5
 INTERRUPTED_EXIT = 130
 WAITING = "Waiting for you to allow it in Ardia…"
 MESSAGES = {
-    "no-such-profile": "no profile is named {name!r} (see ardia profiles)",
+    "no-such-profile": "no profile is named {name!r} (see ardia tabs)",
     "name-taken": "a profile is already named {existing!r}: pick another name, or ardia connect {existing!r} to use it",
     "bad-name": "{name!r} isn't a usable profile name (1 to 60 characters, no control characters)",
     "not-agent": "this session is on one of the owner's profiles; only agent profiles can be renamed",
@@ -70,22 +70,6 @@ def failed(command: str, error: ArdiaError) -> int:
     if isinstance(error, Expired):
         return EXPIRED_EXIT
     return UNREACHABLE_EXIT
-
-
-def profiles(args) -> int:
-    try:
-        rows = Ardia.at(args.data_dir).profiles()
-    except ArdiaError as error:
-        return failed("profiles", error)
-    if args.json:
-        sys.stdout.write(json.dumps({"profiles": rows}, indent=2, ensure_ascii=False) + "\n")
-        return 0
-    if not rows:
-        sys.stdout.write("no profiles\n")
-    for row in rows:
-        connected = f", {row['connected']} connected" if row["connected"] else ""
-        sys.stdout.write(f"{row['name']} ({row['kind']}{connected})\n")
-    return 0
 
 
 def waiting() -> None:

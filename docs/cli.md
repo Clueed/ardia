@@ -17,9 +17,6 @@ the pins into `pyproject.toml`).
 
 ## Commands
 
-- `ardia profiles [--json] [--data-dir DIR]` lists every profile from `GET /ardia/profiles?token=CONTROL`: one line
-  each, `Work (real)` or `LinkedIn (agent, 2 connected)`, or `{"profiles":[{"name","kind","connected"}]}` with
-  `--json` (`kind` `real` or `agent`, `connected` the number of live sessions). Exit 0, or 2 unreachable.
 - `ardia connect NAME | --new NAME [--agent NAME] [--json] [--data-dir DIR]` asks for a session
   (`/ardia/connect?token=CONTROL&agent=…&profile=NAME`, or `&new=NAME`). The agent name is `--agent`, else
   `$ARDIA_AGENT`, else `agent`; it's self-declared and only shown to the owner. `--new` makes an agent profile with no
@@ -114,7 +111,7 @@ and the data dir (async). They return plain data and raise one family of errors,
 and `SessionError` still catch them. `connect` withdraws its request (`&cancel=1`) on any exception, Ctrl-C or a signal
 included, and remembers the session it got.
 
-The CLI commands (`profiles`, `connect`, `disconnect`, `rename`, `run`, `commands`, `tabs`) call it and only format
+The CLI commands (`connect`, `disconnect`, `rename`, `run`, `commands`, `tabs`) call it and only format
 text and map `kind` to exit codes; `exec`'s `run`, `list_tabs`, `events` and `history` are its methods. `events`, `on` and `hooks` keep their own socket handling (raw lines, drop counts, programs), and `browse` its
 daemon.
 
@@ -122,7 +119,7 @@ daemon.
 
 `ardia mcp` is a stdio MCP server (JSON-RPC, protocol 2025-06-18, 2025-03-26 or 2024-11-05, whichever the client asks
 for) written on the API, with no MCP library (`ardia_cli/mcp.py`). Add it with `claude mcp add ardia -- ardia mcp` or
-`codex mcp add ardia -- ardia mcp`. Tools: `profiles`, `connect(name, new, agent)`, `disconnect`, `rename(name)`,
+`codex mcp add ardia -- ardia mcp`. Tools: `connect(name, new, agent)`, `disconnect`, `rename(name)`,
 `run(command, arg, window, tab)`, `commands`, `tabs(profile)`, `wait_for_event(events, timeout ≤ 300 s, full_urls)` (the next
 event, or `{timedOut: true}`), `browse(args)`, `history(days, limit, profile, domains)`.
 There's no `exec`: a client that can call tools shouldn't get arbitrary Python on the owner's Mac.
@@ -136,7 +133,7 @@ There's no `exec`: a client that can call tools shouldn't get arbitrary Python o
   client gave a `progressToken`, then waits up to 120 s; `notifications/cancelled` withdraws the request.
 - **browse** runs `ardia browse --json ARGS` with the session in the environment (never argv) and returns its `data`;
   a batch returns `{batch: [...]}`.
-- **Results.** A tool's data is both `structuredContent` (lists wrapped, like `{profiles: [...]}`) and JSON text. A
+- **Results.** A tool's data is both `structuredContent` (lists wrapped, like `{commands: [...]}`) and JSON text. A
   failure is `isError: true` with `{error: kind, code, message}`: the API's kinds, plus `browse` with agent-browser's
   code (`unknown_ref`, `stale_ref`, …). Unknown tools, unknown or missing arguments and wrong types are JSON-RPC
   `-32602`. Calls run concurrently; `ping` answers while one waits.

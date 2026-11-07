@@ -9,12 +9,6 @@ Connect first: ardia connect --new NAME makes a profile of your own (no prompt);
 existing one once the owner allows it. Either prints a session id: pass it as --session ID (or $ARDIA_SESSION)
 to exec, run, scripts test, rename and disconnect, and as --ardia-session ID (or $ARDIA_SESSION) to browse.
 """
-PROFILES_DESCRIPTION = """\
-List Ardia's profiles: name, kind (real: the owner's; agent: made by ardia connect --new) and how many sessions
-are connected to it.
-
-Exit status: 0 done, 2 Ardia can't be reached.
-"""
 CONNECT_DESCRIPTION = """\
 Connect to a profile and print the session id (only that, on stdout; a JSON object with --json).
 
@@ -75,8 +69,8 @@ Endpoint: --ws, else --port (plain DevTools servers only), else $ARDIA_CDP_URL, 
 --session ID or $ARDIA_SESSION from ardia connect.
 """
 MCP_DESCRIPTION = """\
-Serve Ardia to an MCP client over stdio: the same calls as the ardia command, as MCP tools (profiles, connect,
-disconnect, rename, run, commands, tabs, wait_for_event, browse, history). exec isn't one.
+Serve Ardia to an MCP client over stdio: the same calls as the ardia command, as MCP tools (connect, disconnect,
+rename, run, commands, tabs, wait_for_event, browse, history). exec isn't one.
 
 The server keeps the session: the client calls connect (or the server starts with --session ID or $ARDIA_SESSION),
 and no tool ever returns the token. The agent name the owner sees is connect's agent, else $ARDIA_AGENT, else the
@@ -122,10 +116,6 @@ def build_parser():
     run.add_argument("--session", metavar="ID", help="the session from ardia connect (default: $ARDIA_SESSION)")
 
     data_help = "the Ardia data dir to find (default: $ARDIA_DATA_DIR, else the installed app's)"
-    listing = commands.add_parser("profiles", help="list Ardia's profiles", description=PROFILES_DESCRIPTION, formatter_class=argparse.RawDescriptionHelpFormatter)
-    listing.add_argument("--json", action="store_true", help="print JSON")
-    listing.add_argument("--data-dir", metavar="DIR", help=data_help)
-
     connect = commands.add_parser("connect", help="connect to a profile and print the session id", description=CONNECT_DESCRIPTION, formatter_class=argparse.RawDescriptionHelpFormatter)
     connect.add_argument("name", nargs="?", metavar="NAME", help="an existing profile (the owner has to allow it)")
     connect.add_argument("--new", metavar="NAME", help="make an agent profile named NAME and connect to it")
@@ -191,7 +181,7 @@ def main(argv: list[str] | None = None) -> int:
     args.program = program
     if args.command == "exec":
         return run_exec(args, parser)
-    if args.command in ("profiles", "connect", "disconnect", "rename"):
+    if args.command in ("connect", "disconnect", "rename"):
         return run_session_command(args)
     if args.command == "mcp":
         from ardia_cli import mcp

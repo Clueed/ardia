@@ -88,12 +88,6 @@ class Mcp(Base):
         self.assertEqual(client.ask("nope")["error"]["code"], -32601)
         self.assertEqual(client.ask("tools/call", {"name": "nope"})["error"]["code"], -32602)
 
-    def test_profiles(self):
-        self.serve(lambda path, params: (200, {"profiles": [{"name": "Personal", "kind": "real", "connected": 0}, {"name": "Scout", "kind": "agent", "connected": 1}]}))
-        result = self.client().tool("profiles")
-        self.assertEqual(result["structuredContent"]["profiles"], [{"name": "Personal", "kind": "real", "connected": 0}, {"name": "Scout", "kind": "agent", "connected": 1}])
-        self.assertNotIn("isError", result)
-
     def test_session_tools_ask_for_connect_first(self):
         self.serve(lambda path, params: (200, {}))
         client = self.client()
@@ -185,13 +179,13 @@ class Mcp(Base):
         self.assertEqual(result["structuredContent"], {"error": "refused", "code": "name-taken", "message": "a profile is already named 'Scout': pick another name, or connect to 'Scout' to use it"})
 
     def test_unreachable_without_ardia(self):
-        result = self.client().tool("profiles")
+        result = self.client().tool("connect", {"name": "Scout", "new": True})
         self.assertTrue(result["isError"])
         self.assertEqual(result["structuredContent"]["error"], "unreachable")
 
     def test_bad_arguments_and_unknown_events(self):
         client = self.client()
-        self.assertEqual(client.ask("tools/call", {"name": "profiles", "arguments": {"extra": 1}})["error"]["code"], -32602)
+        self.assertEqual(client.ask("tools/call", {"name": "tabs", "arguments": {"extra": 1}})["error"]["code"], -32602)
         result = client.tool("wait_for_event", {"events": ["tab.nope"]})
         self.assertEqual(result["structuredContent"]["code"], "unknown_event")
 

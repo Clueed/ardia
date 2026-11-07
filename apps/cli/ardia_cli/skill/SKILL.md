@@ -10,13 +10,14 @@ description: Drive the user's running Ardia browser from the terminal with `ardi
 Every agent connects before it drives pages, and works inside one profile.
 
 ```sh
-ardia profiles
+ardia tabs
 ardia connect --new research --agent claude-code
 ardia exec --session <ID> 'await tab.title()'
 ardia disconnect --session <ID>
 ```
 
-`ardia profiles` lists each profile's name, kind (`real`: the user's, `agent`: made by an agent) and live sessions.
+`ardia tabs` lists each profile's name, kind (`real`: the user's, `agent`: made by an agent), pins and tabs, and
+the windows. It needs no session.
 
 - `ardia connect --new NAME` makes an agent profile of your own (empty, no logins) and connects without a prompt.
   Use it for anything that doesn't need the user's accounts.
