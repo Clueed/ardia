@@ -333,8 +333,7 @@ def browse_answer(status: int, out: str, err: str):
 
 
 def success(data) -> dict:
-    structured = data if isinstance(data, dict) else {"result": data}
-    return {"content": [{"type": "text", "text": json.dumps(data, ensure_ascii=False, default=str)}], "structuredContent": structured}
+    return {"content": [{"type": "text", "text": json.dumps(data, ensure_ascii=False, default=str)}]}
 
 
 def failure(kind: str, code: str, message: str) -> dict:

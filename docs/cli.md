@@ -133,9 +133,10 @@ There's no `exec`: a client that can call tools shouldn't get arbitrary Python o
   client gave a `progressToken`, then waits up to 120 s; `notifications/cancelled` withdraws the request.
 - **browse** runs `ardia browse --json ARGS` with the session in the environment (never argv) and returns its `data`;
   a batch returns `{batch: [...]}`.
-- **Results.** A tool's data is both `structuredContent` (lists wrapped, like `{commands: [...]}`) and JSON text. A
-  failure is `isError: true` with `{error: kind, code, message}`: the API's kinds, plus `browse` with agent-browser's
-  code (`unknown_ref`, `stale_ref`, …). Unknown tools, unknown or missing arguments and wrong types are JSON-RPC
+- **Results.** A tool's data is JSON text only, with no `structuredContent`: Claude Code shows the model only
+  `structuredContent` when both are present, and no tool declares an `outputSchema`. A failure is `isError: true`
+  with its sentence as text and `{error: kind, code, message}` as `structuredContent`: the API's kinds, plus
+  `browse` with agent-browser's code (`unknown_ref`, `stale_ref`, …). Unknown tools, unknown or missing arguments and wrong types are JSON-RPC
   `-32602`. Calls run concurrently; `ping` answers while one waits.
 
 ## The `ardia browse` command

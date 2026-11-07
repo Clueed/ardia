@@ -107,10 +107,11 @@ class Mcp(Base):
         fake = self.serve(respond)
         client = self.client()
         connected = client.tool("connect", {"name": "Scout", "new": True})
-        self.assertEqual(connected["structuredContent"], {"profile": "Scout", "kind": "agent"})
+        self.assertEqual(json.loads(connected["content"][0]["text"]), {"profile": "Scout", "kind": "agent"})
+        self.assertNotIn("structuredContent", connected)
         self.assertEqual(fake.routes("/ardia/connect")[0], {"token": CONTROL_TOKEN, "agent": "test-client", "new": "Scout"})
         ran = client.tool("run", {"command": "newTab:background"})
-        self.assertEqual(ran["structuredContent"], {"result": {"tab": 7}})
+        self.assertEqual(json.loads(ran["content"][0]["text"]), {"result": {"tab": 7}})
         self.assertEqual(fake.routes("/ardia/run"), [{"token": SESSION_TOKEN, "command": "newTab", "arg": '"background"'}])
         client.close()
         self.assertFalse(any(SESSION_TOKEN in line or CONTROL_TOKEN in line for line in client.raw))
@@ -120,7 +121,7 @@ class Mcp(Base):
         client = self.client()
         notes: list = []
         answer = client.ask("tools/call", {"name": "connect", "arguments": {"name": "Work", "agent": "claude"}, "_meta": {"progressToken": "p1"}}, notes)
-        self.assertEqual(answer["result"]["structuredContent"], {"profile": "Work", "kind": "real"})
+        self.assertEqual(json.loads(answer["result"]["content"][0]["text"]), {"profile": "Work", "kind": "real"})
         progress = [n for n in notes if n.get("method") == "notifications/progress"]
         self.assertEqual(progress[0]["params"]["progressToken"], "p1")
         self.assertIn("allow", progress[0]["params"]["message"])
