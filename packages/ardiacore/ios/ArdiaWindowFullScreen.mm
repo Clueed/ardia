@@ -46,6 +46,10 @@ void ActOcclusion(NSWindow *window, NSNumber *visible) {
   [NSNotificationCenter.defaultCenter postNotificationName:NSWindowDidChangeOcclusionStateNotification object:window];
 }
 
+NSNumber *ActedOcclusion(NSWindow *window) {
+  return window ? objc_getAssociatedObject(window, kActedOcclusionKey) : nil;
+}
+
 NSTimeInterval gActedOcclusionGap = NAN;
 
 }
@@ -75,7 +79,7 @@ void ActWindowFullScreen(ArdiaCoreWindow *coreWindow, BOOL enter, NSTimeInterval
   if (trace) NSLog(@"[ardiacore-vis] window %ld acted %@", (long)window.windowNumber, enter ? @"willEnterFullScreen" : @"willExitFullScreen");
   [center postNotificationName:enter ? NSWindowWillEnterFullScreenNotification : NSWindowWillExitFullScreenNotification object:window];
   if (enter) set(YES);
-  if (enter) {
+  if (enter && !IsAgentWindow(window)) {
     objc_setAssociatedObject(window, kActedRestoreFrameKey, [NSValue valueWithRect:window.frame], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if (NSScreen *screen = window.screen ?: NSScreen.mainScreen) [window setFrame:screen.frame display:YES];
   } else if (NSValue *restore = objc_getAssociatedObject(window, kActedRestoreFrameKey)) {
@@ -84,7 +88,7 @@ void ActWindowFullScreen(ArdiaCoreWindow *coreWindow, BOOL enter, NSTimeInterval
   }
   objc_setAssociatedObject(window, kActingKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
   const NSTimeInterval gap = gActedOcclusionGap;
-  if (!isnan(gap)) {
+  if (!isnan(gap) && !IsAgentWindow(window)) {
     NSObject *turn = [NSObject new];
     objc_setAssociatedObject(window, kActedOcclusionTurnKey, turn, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     ActOcclusion(window, @NO);
@@ -113,7 +117,7 @@ namespace {
 
 void ToggleWindowFullScreen(ArdiaCoreWindow *coreWindow) {
   NSWindow *window = coreWindow.window;
-  if (!ardia_host::Background()) return [window toggleFullScreen:nil];
+  if (!ardia_host::Background() && !IsAgentWindow(window)) return [window toggleFullScreen:nil];
   const BOOL enter = !IsWindowFullScreen(window);
   ardia_host::LogActivation(enter ? @"toggleFullScreen: (page full screen; acted out)" : @"toggleFullScreen: (page left full screen; acted out)");
   ActWindowFullScreen(coreWindow, enter, gActedTransition);

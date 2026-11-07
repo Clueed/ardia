@@ -81,7 +81,7 @@ final class WindowManager: NSObject, NSWindowDelegate {
     }
     let kind = options.kind, title = options.title, frame = options.frame, claim = options.claim
     let small = kind == .small
-    if kind != .browser && !small { return openAux(id: id, kind: kind, title: title) }
+    if !kind.isBrowser { return openAux(id: id, kind: kind, title: title) }
     guard let makeWindow = WindowHost.makeWindow, let makeContentView = WindowHost.makeContentView else { return }
     if !small, ArdiaChromeWindowHost.takeDismissedAppWindow(id) {
       ShellEvents.send(.window, ["type": "close", "id": id])
@@ -92,6 +92,7 @@ final class WindowManager: NSObject, NSWindowDelegate {
       return
     }
     if let chromeWindow = ChromeWindows.makeWindow(profile: options.profile, chromeWindow: small ? nil : options.chromeWindow, appWindow: small ? claim : id) {
+      if kind == .agent { return showAgent(ManagedWindow(id: id, kind: kind, window: chromeWindow), title: title, root: makeContentView(id)) }
       if options.incognito { chromeWindow.appearance = NSAppearance(named: .darkAqua) }
       let entry = ManagedWindow(id: id, kind: kind, window: chromeWindow)
       let root = makeContentView(id)
@@ -160,6 +161,20 @@ final class WindowManager: NSObject, NSWindowDelegate {
     fullScreen.windowShown(id)
   }
 
+  private func showAgent(_ entry: ManagedWindow, title: String, root: NSView) {
+    let window = entry.window
+    ArdiaChromeWindowHost.keepAgentWindow(window)
+    ArdiaChromeWindowHost.embedRootView(root, in: window)
+    entry.keepContentSized(in: root)
+    entry.watchContent(of: root) { [weak self] entry, root in self?.contentAppeared(entry, root: root) }
+    ChromeWindows.onSwap { [weak self] from, to in self?.adopt(from: from, to: to) }
+    observeDelegateNotifications(window)
+    window.title = title
+    relayoutRoot(window)
+    managed[entry.id] = entry
+    window.orderBack(nil)
+  }
+
   private func reveal(_ entry: ManagedWindow) {
     guard let (waiting, entrance) = entry.takeReveal() else { return }
     if let entrance {
@@ -226,6 +241,7 @@ final class WindowManager: NSObject, NSWindowDelegate {
     guard let id = id(of: from), let entry = managed[id] else { return }
     NotificationCenter.default.removeObserver(self, name: nil, object: from)
     entry.window = to
+    if entry.kind == .agent { ArdiaChromeWindowHost.keepAgentWindow(to) }
     if lastPlaced === from { lastPlaced = to }
     observeDelegateNotifications(to)
     observeFrame(to)
@@ -320,7 +336,7 @@ final class WindowManager: NSObject, NSWindowDelegate {
     guard let entry = managed[id] else { return done() }
     if entry.exit != nil { return entry.exit!.append(done) }
     let window = entry.window
-    guard entry.kind.isBrowser, window.isVisible, !window.isMiniaturized, !window.styleMask.contains(.fullScreen), !entry.isWaitingToReveal
+    guard entry.kind.isBrowser, entry.kind != .agent, window.isVisible, !window.isMiniaturized, !window.styleMask.contains(.fullScreen), !entry.isWaitingToReveal
     else { return done() }
     entry.exit = [done]
     if replacement == nil, window.isKeyWindow { nextKeyWindow(after: window)?.makeKey() }

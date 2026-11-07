@@ -146,6 +146,8 @@ test("a session's gateway tabs open in its own agent window, never in an owner w
   assert.ok(!owned.has(S().tabs[other].windowId));
   assert.deepEqual(S().windows[w].tabIds.filter((id) => [first, second, other].includes(id)), []);
   assert.equal(S().ui.focusOrder[0], w, "the owner's window keeps focus");
+  S().setFocusedWindow(home);
+  assert.equal(S().ui.focusOrder[0], w, "a page asking to be shown never focuses the agent window");
 });
 
 test("a session's agent window closes when the session ends, its tabs parked in the owner's window", () => {

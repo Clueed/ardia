@@ -11,6 +11,7 @@ final class Gateway {
   private static let maxPending = 16
   private static let maxOpensPerSession = 4
   private static let runDeadline: TimeInterval = 30
+  private static let activateDeadline: TimeInterval = 5
   private static let runStatus: [String: Int] = ["bad_request": 400, "unknown_command": 404, "refused": 403, "no_window": 409, "failed": 500]
   private static let fileName = "ArdiaGateway.json"
 
@@ -30,6 +31,7 @@ final class Gateway {
   private var sessions: [GatewaySession] = []
   private var opens: [String: (session: GatewaySession, deadline: Date, done: (String?) -> Void)] = [:]
   private var runs: [String: (Int, Any?) -> Void] = [:]
+  private var activations: [String: (GatewayActivation) -> Void] = [:]
   private var announcedActive = false
   private var openCount = 0
   private var quitObserver: NSObjectProtocol?
@@ -152,6 +154,8 @@ final class Gateway {
     for open in opens.values { open.done(nil) }
     for answer in runs.values { answer(500, ["error": "failed", "message": "Control is off."]) }
     runs = [:]
+    for answer in activations.values { answer(.refused("control is off")) }
+    activations = [:]
     announceActivity()
     opens = [:]
     lateOpens = [:]
@@ -387,8 +391,28 @@ final class Gateway {
       open.done(nil)
       self.queue.asyncAfter(deadline: .now() + Self.requestLifetime) { self.lateOpens[id] = nil }
     }
-    onMain { [data = ["request": id, "profile": session.profileId, "agent": session.agent, "url": url, "background": background] as [String: Any]] in ArdiaEvents.emit("gateway.openTab", data: data) }
+    onMain { [data = ["request": id, "session": session.id, "profile": session.profileId, "agent": session.agent, "url": url, "background": background] as [String: Any]] in ArdiaEvents.emit("gateway.openTab", data: data) }
     return true
+  }
+
+  func activateReply(request: String, error: String?) {
+    queue.async { [self] in
+      guard let answer = activations.removeValue(forKey: request) else { return }
+      answer(error.map { .refused($0) } ?? .done)
+    }
+  }
+
+  private func activateTab(_ session: GatewaySession, _ target: String, _ done: @escaping (GatewayActivation) -> Void) {
+    scope.tab(ofTarget: target, key: session.key) { [weak self] tabId in
+      guard let self else { return }
+      guard let tabId else { return done(.forward) }
+      let id = GatewayTokens.random(bytes: 12)
+      self.activations[id] = done
+      self.queue.asyncAfter(deadline: .now() + Self.activateDeadline) { [weak self] in
+        self?.activations.removeValue(forKey: id)?(.refused("Ardia didn't answer in time"))
+      }
+      self.onMain { [data = ["request": id, "session": session.id, "profile": session.profileId, "agent": session.agent, "tabId": tabId] as [String: Any]] in ArdiaEvents.emit("gateway.activateTab", data: data) }
+    }
   }
 
   private func resolveTab(_ tabId: String, key: String, until deadline: Date, done: @escaping (String?) -> Void) {
@@ -417,9 +441,11 @@ final class Gateway {
       }
       let client = GatewaySocket(connection: connection, leftover: request.leftover)
       let upstream = GatewayUpstream(url: url, queue: queue)
-      let proxy = GatewayProxy(session: session, client: client, upstream: upstream, scope: scope, page: page) { [weak self] session, url, background, done in
-        self?.openTab(session, url, background, done) ?? false
-      }
+      let proxy = GatewayProxy(
+        session: session, client: client, upstream: upstream, scope: scope, page: page,
+        open: { [weak self] session, url, background, done in self?.openTab(session, url, background, done) ?? false },
+        activate: { [weak self] session, target, done in self?.activateTab(session, target, done) }
+      )
       proxy.onClose = { [weak self, weak proxy] in
         session.proxies.removeAll { $0 === proxy }
         self?.announceActivity()

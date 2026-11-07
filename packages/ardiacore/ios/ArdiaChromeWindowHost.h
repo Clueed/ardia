@@ -42,6 +42,13 @@ NSView *_Nullable ArdiaWindowRootView(NSWindow *_Nullable window);
 NSValue *_Nullable ArdiaTrafficLightsCenter(NSWindow *_Nullable window);
 BOOL ArdiaTrafficLightsTrailing(NSWindow *_Nullable window);
 
+@interface ArdiaChromeWindowHost (Agent)
+
++ (void)keepAgentWindow:(NSWindow *)window;
++ (BOOL)isAgentWindow:(nullable NSWindow *)window;
+
+@end
+
 @interface ArdiaChromeWindowHost (Dev)
 
 + (nullable NSString *)devAction:(NSString *)action window:(NSWindow *)window;

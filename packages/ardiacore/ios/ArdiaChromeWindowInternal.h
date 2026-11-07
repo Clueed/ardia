@@ -64,6 +64,8 @@ extern const void *kActedFullScreenKey;
 extern const void *kWindowFullScreenKey;
 BOOL IsWindowFullScreen(NSWindow *window);
 void ActOcclusion(NSWindow *window, NSNumber *visible);
+NSNumber *ActedOcclusion(NSWindow *window);
+BOOL IsAgentWindow(NSWindow *window);
 extern NSTimeInterval gActedOcclusionGap;
 void ActWindowFullScreen(ArdiaCoreWindow *coreWindow, BOOL enter, NSTimeInterval seconds);
 extern NSTimeInterval gActedTransition;

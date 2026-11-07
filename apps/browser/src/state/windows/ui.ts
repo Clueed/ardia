@@ -38,7 +38,7 @@ export const createUiSlice: StateCreator<BrowserState, [], [], UiSlice> = (set, 
   setFocusedWindow(id) {
     const s = get();
     const { ui, windows } = s;
-    if (!windows[id]) return;
+    if (!windows[id] || windows[id].agentSession) return;
     const lastProfileId = linkProfileOf(s, windows[id]) ?? ui.lastProfileId;
     if (ui.focusOrder[0] === id && ui.lastProfileId === lastProfileId) return;
     set({ ui: { ...ui, focusOrder: [id, ...ui.focusOrder.filter((w) => w !== id)], lastProfileId } });

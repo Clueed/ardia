@@ -7,6 +7,7 @@ final class GatewayScope {
   private let queue: DispatchQueue
   private var contextOfKey: [String: String] = [:]
   private var contexts: [String: String] = [:]
+  private var tabOfTarget: [String: String] = [:]
   private var monitor: GatewayUpstream?
   private var nextId = 0
   private var engineSource: (() -> GatewayEngine?)?
@@ -31,6 +32,7 @@ final class GatewayScope {
     monitor = nil
     contexts = [:]
     contextOfKey = [:]
+    tabOfTarget = [:]
   }
 
   private func connect(_ engine: GatewayEngine?) {
@@ -120,6 +122,27 @@ final class GatewayScope {
     }
   }
 
+  func tab(ofTarget target: String, key: String, done: @escaping (String?) -> Void) {
+    if let tabId = tabOfTarget[target] { return done(tabId) }
+    DispatchQueue.main.async { [weak self] in
+      let tabs = ArdiaGatewayTabs.hostedTabs().filter { $0["profile"] == key }.compactMap { $0["tabId"] }
+      self?.find(target, in: tabs[...], key: key, done: done)
+    }
+  }
+
+  private func find(_ target: String, in tabs: ArraySlice<String>, key: String, done: @escaping (String?) -> Void) {
+    guard let tabId = tabs.first else { return queue.async { done(nil) } }
+    ArdiaGatewayTabs.target(ofTab: tabId) { [weak self] info in
+      guard let self else { return }
+      let found = info?["targetId"] as? String
+      self.queue.async {
+        if let found, let info, self.learn(target: found, info: info, key: key) { self.tabOfTarget[found] = tabId }
+      }
+      if found == target { return self.queue.async { done(tabId) } }
+      self.find(target, in: tabs.dropFirst(), key: key, done: done)
+    }
+  }
+
   private func probe(_ tabs: ArraySlice<String>, key: String, done: @escaping () -> Void) {
     guard let tabId = tabs.first else { return queue.async(execute: done) }
     ArdiaGatewayTabs.target(ofTab: tabId) { [weak self] info in
@@ -152,7 +175,10 @@ final class GatewayScope {
     case "Target.targetCreated", "Target.targetInfoChanged":
       if let info = params["targetInfo"] as? [String: Any] { record(info) }
     case "Target.targetDestroyed":
-      if let target = params["targetId"] as? String { contexts[target] = nil }
+      if let target = params["targetId"] as? String {
+        contexts[target] = nil
+        tabOfTarget[target] = nil
+      }
     default:
       break
     }

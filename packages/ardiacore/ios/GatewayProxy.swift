@@ -1,7 +1,14 @@
 import Foundation
 
+enum GatewayActivation {
+  case done
+  case refused(String)
+  case forward
+}
+
 final class GatewayProxy {
   typealias Opener = (_ session: GatewaySession, _ url: String, _ background: Bool, _ done: @escaping (String?) -> Void) -> Bool
+  typealias Activator = (_ session: GatewaySession, _ target: String, _ done: @escaping (GatewayActivation) -> Void) -> Void
 
   private struct Pending {
     let clientId: Any?
@@ -17,6 +24,7 @@ final class GatewayProxy {
   private let upstream: GatewayUpstream
   private let scope: GatewayScope
   private let open: Opener
+  private let activate: Activator
   private var pending: [Int: Pending] = [:]
   private var nextId = 0
   private var shown: Set<String> = []
@@ -24,13 +32,14 @@ final class GatewayProxy {
   private var closed = false
   var onClose: (() -> Void)?
 
-  init(session: GatewaySession, client: GatewaySocket, upstream: GatewayUpstream, scope: GatewayScope, page: String?, open: @escaping Opener) {
+  init(session: GatewaySession, client: GatewaySocket, upstream: GatewayUpstream, scope: GatewayScope, page: String?, open: @escaping Opener, activate: @escaping Activator) {
     self.session = session
     self.key = session.key
     self.client = client
     self.upstream = upstream
     self.scope = scope
     self.open = open
+    self.activate = activate
     if let page { shown.insert(page) }
   }
 
@@ -64,6 +73,8 @@ final class GatewayProxy {
     if Self.contextMethods.contains(method) { return refuse(id, child, method) }
     if let target = params["targetId"] as? String, !scope.inScope(target: target, key: key) { return refuse(id, child, "\(method) on that target") }
     if let other = params["sessionId"] as? String, children[other] == nil { return refuse(id, child, "\(method) on that session") }
+    if method == "Target.activateTarget", let target = params["targetId"] as? String { return bringForward(id, child, target, message) }
+    if method == "Page.bringToFront", let child, let target = children[child] { return bringForward(id, child, target, message) }
     nextId += 1
     pending[nextId] = Pending(clientId: id, method: method, target: params["targetId"] as? String)
     message["id"] = nextId
@@ -134,6 +145,27 @@ final class GatewayProxy {
       self.send(client: ["id": id, "result": ["targetId": target]])
     }
     if !accepted { refuse(id, nil, "Target.createTarget", reason: "too many tabs are opening at once") }
+  }
+
+  private func bringForward(_ id: Any, _ child: String?, _ target: String, _ message: [String: Any]) {
+    guard let session else { return refuse(id, child, "bringing a tab forward there") }
+    activate(session, target) { [weak self] verdict in
+      guard let self, !self.closed else { return }
+      switch verdict {
+      case .done:
+        var reply: [String: Any] = ["id": id, "result": [String: Any]()]
+        if let child { reply["sessionId"] = child }
+        self.send(client: reply)
+      case .refused(let reason):
+        self.refuse(id, child, "", reason: reason)
+      case .forward:
+        self.nextId += 1
+        var forwarded = message
+        self.pending[self.nextId] = Pending(clientId: id, method: message["method"] as? String ?? "", target: target)
+        forwarded["id"] = self.nextId
+        self.send(upstream: forwarded)
+      }
+    }
   }
 
   private func detach(_ child: String, parent: String?) {

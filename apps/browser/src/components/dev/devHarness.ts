@@ -140,6 +140,9 @@ export function startDevHarness() {
     get sharedFolders(): typeof import("../../state/sharedFolders/store") & typeof import("../../state/sharedFolders/engine") & typeof import("../../state/sharedFolders/actions") {
       return { ...require("../../state/sharedFolders/store"), ...require("../../state/sharedFolders/engine"), ...require("../../state/sharedFolders/actions") };
     },
+    get agentWindows(): typeof import("../../state/windows/agentWindows") & { clickTab: typeof import("../../state/sidebar/actions").clickTab } {
+      return { ...require("../../state/windows/agentWindows"), clickTab: require("../../state/sidebar/actions").clickTab };
+    },
     get automation(): typeof import("../../state/automation/approvals") & typeof import("../../state/automation/hookRules") & typeof import("../../state/automation/hookPolicy") & typeof import("../../state/automation/decideSocket") {
       return { ...require("../../state/automation/approvals"), ...require("../../state/automation/hookRules"), ...require("../../state/automation/hookPolicy"), ...require("../../state/automation/decideSocket") };
     },
