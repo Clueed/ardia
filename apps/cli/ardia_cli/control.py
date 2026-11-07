@@ -11,7 +11,7 @@ from ardia_cli import endpoint
 SOCKET_FILE = "ArdiaControl.sock"
 SUN_PATH_MAX = 103
 MAX_LINE = 1024 * 1024
-PROTOCOL = 2
+PROTOCOL = 3
 CONNECT_TIMEOUT = 5.0
 CALL_TIMEOUT = 30.0
 EVENT_QUEUE_CAP = 1000

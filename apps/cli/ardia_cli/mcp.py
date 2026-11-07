@@ -17,7 +17,14 @@ Drives the Ardia browser the user is running. Call connect first: connect(name, 
 of your own with no prompt; connect(name) on one of the owner's profiles waits until the owner allows it in Ardia.
 The session lasts until disconnect, Ardia quits, control is turned off or 30 minutes without traffic.
 browse takes agent-browser's command line (snapshot, click @e1, fill @e2 "text", open URL, ...) in that profile;
-run takes one of Ardia's own commands (see commands)."""
+run takes one of Ardia's own commands (see commands). tabs lists every profile, window, pin and tab, with the ids
+run takes; it needs no session."""
+TABS_DESCRIPTION = (
+    "Everything open in Ardia, live: windows (id, kind, focused, the profile each shows) and every profile, the "
+    "owner's and agents', with its pins (favorites and pinned tabs, once each, including those of profiles no "
+    "window shows) and its tabs (id, window, title, url, folder, active). Private windows never appear. profile "
+    "limits it to one profile. Pass a tab's id or window as run's tab or window."
+)
 
 
 def schema(properties: dict | None = None, required: tuple = ()) -> dict:
@@ -58,9 +65,9 @@ TOOLS = [
         "inputSchema": schema(),
     },
     {
-        "name": "windows",
-        "description": "List Ardia's windows and their tabs (private windows are never included).",
-        "inputSchema": schema(),
+        "name": "tabs",
+        "description": TABS_DESCRIPTION,
+        "inputSchema": schema({"profile": STRING}),
     },
     {
         "name": "wait_for_event",
@@ -76,16 +83,6 @@ TOOLS = [
         "name": "history",
         "description": "The owner's recent history per URL, newest first (owner profiles only, http(s) pages). domains=true rolls it up per domain.",
         "inputSchema": schema({"days": {"type": "number", "default": 1}, "limit": {"type": "integer", "default": 200}, "profile": STRING, "domains": {"type": "boolean", "default": False}}),
-    },
-    {
-        "name": "pinned",
-        "description": "The owner's favorites and pinned tabs from Ardia's saved session.",
-        "inputSchema": schema(),
-    },
-    {
-        "name": "open_tabs",
-        "description": "The owner's open tabs from Ardia's saved session (url, title, profile, pinned).",
-        "inputSchema": schema({"profile": STRING}),
     },
 ]
 
@@ -254,8 +251,8 @@ class Server:
     async def tool_commands(self, _token):
         return {"commands": await self.ardia.commands()}
 
-    async def tool_windows(self, _token):
-        return {"windows": await self.ardia.windows()}
+    async def tool_tabs(self, _token, profile: str | None = None):
+        return await self.ardia.tabs(profile)
 
     async def tool_wait_for_event(self, _token, events: list | None = None, timeout: float = 30, full_urls: bool = False):
         from ardia_cli.control import check_events
@@ -296,11 +293,6 @@ class Server:
     async def tool_history(self, _token, days: float = 1, limit: int = 200, profile: str | None = None, domains: bool = False):
         return {"history": await self.ardia.history(days, limit, profile, domains)}
 
-    async def tool_pinned(self, _token):
-        return {"pinned": await self.ardia.pinned()}
-
-    async def tool_open_tabs(self, _token, profile: str | None = None):
-        return {"tabs": await self.ardia.open_tabs(profile)}
 
 
 JSON_TYPES = {"string": str, "boolean": bool, "integer": int, "number": (int, float), "array": list, "object": dict}

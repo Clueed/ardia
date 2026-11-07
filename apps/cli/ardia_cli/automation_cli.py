@@ -25,6 +25,18 @@ Examples:
   ardia run toggleSidebar --window 2 --session ID
   ardia run reload --tab 14 --session ID
 """
+TABS_DESCRIPTION = """\
+List everything open in Ardia, live: the windows (which is focused, which profile each shows) and every profile,
+the owner's and agents', with its pins (favorites and pinned tabs, once each, parked ones included for a profile
+no window shows) and its tabs, each with the window it's in and its folder. Private windows never appear. Pass
+a tab id to ardia run --tab and a window id to --window. It needs no session.
+
+Exit status: 0 listed, 1 refused (no such profile), 2 Ardia can't be reached.
+
+Examples:
+  ardia tabs
+  ardia tabs --profile Work --json
+"""
 EVENTS_DESCRIPTION = f"""\
 Print Ardia's events as they happen, until interrupted. EVENT is one of:
   {", ".join(control.EVENTS)}
@@ -91,16 +103,17 @@ def add_parsers(commands, formatter):
     run = data_dir(commands.add_parser("run", help="run one of Ardia's commands", description=RUN_DESCRIPTION, formatter_class=formatter))
     run.add_argument("command_id", metavar="COMMAND", help="a command id (see ardia commands)")
     run.add_argument("arg", nargs="?", metavar="ARG", help="one of the command's variants")
-    run.add_argument("--window", metavar="ID", help="a window id from ardia windows (default: the last focused window)")
-    run.add_argument("--tab", metavar="ID", help="a tab id from ardia windows, for commands that act on a page; never changes focus")
+    run.add_argument("--window", metavar="ID", help="a window id from ardia tabs (default: the last focused window)")
+    run.add_argument("--tab", metavar="ID", help="a tab id from ardia tabs, for commands that act on a page; never changes focus")
     run.add_argument("--json", action="store_true", help="print the reply as JSON")
     run.add_argument("--session", metavar="ID", help="the session from ardia connect (default: $ARDIA_SESSION)")
 
     listing = data_dir(commands.add_parser("commands", help="list the commands ardia run can run", description="List the commands ardia run can run: ids, titles and variants."))
     listing.add_argument("--json", action="store_true", help="print JSON")
 
-    windows = data_dir(commands.add_parser("windows", help="list Ardia's windows and their tabs", description="List Ardia's windows and their tabs (private windows are never included)."))
-    windows.add_argument("--json", action="store_true", help="print JSON")
+    tabs = data_dir(commands.add_parser("tabs", help="list every profile, window, pin and tab", description=TABS_DESCRIPTION, formatter_class=formatter))
+    tabs.add_argument("--profile", metavar="NAME", help="only this profile")
+    tabs.add_argument("--json", action="store_true", help="print JSON")
 
     events = data_dir(commands.add_parser("events", help="print events as they happen", description=EVENTS_DESCRIPTION, formatter_class=formatter))
     events.add_argument("events", nargs="*", metavar="EVENT", help="event names (default: all)")
@@ -144,7 +157,7 @@ def complain(text: str) -> None:
 
 
 def dispatch(args, parser) -> int:
-    handlers = {"run": cmd_run, "commands": cmd_commands, "windows": cmd_windows, "events": cmd_events, "on": cmd_on}
+    handlers = {"run": cmd_run, "commands": cmd_commands, "tabs": cmd_tabs, "events": cmd_events, "on": cmd_on}
     if args.command == "hooks":
         handler = {"run": hooks_run, "install": hooks_install, "uninstall": hooks_uninstall, "list": hooks_list}.get(args.hooks_command)
         if handler is None:
@@ -244,11 +257,11 @@ def parse_id(text: str):
     return int(text) if text.isdigit() and len(text) < 16 else text
 
 
-def listed(args, method: str):
+def listed(args, method: str, **params):
     from ardia_cli.api import Ardia, ArdiaError, Refused
 
     try:
-        return asyncio.run(getattr(Ardia.at(args.data_dir), method)()), 0
+        return asyncio.run(getattr(Ardia.at(args.data_dir), method)(**params)), 0
     except Refused as error:
         complain(f"ardia {method}: {error.message}")
         return None, 1
@@ -273,24 +286,27 @@ def cmd_commands(args) -> int:
     return 0
 
 
-def cmd_windows(args) -> int:
-    windows, status = listed(args, "windows")
+def cmd_tabs(args) -> int:
+    listing, status = listed(args, "tabs", profile=args.profile)
     if status:
         return status
     if args.json:
-        say(json.dumps(windows, indent=2, ensure_ascii=False))
+        say(json.dumps(listing, indent=2, ensure_ascii=False))
         return 0
-    for window in windows or []:
-        if not isinstance(window, dict):
-            continue
+    for window in listing.get("windows") or []:
         flags = [str(window.get("kind", "normal"))] + (["focused"] if window.get("focused") else [])
-        profile = window.get("profileName") or window.get("profile") or ""
-        say(f"window {window.get('id')}  {', '.join(flags)}  {profile}".rstrip())
-        for tab in window.get("tabs") or []:
-            marks = ("*" if tab.get("active") else " ") + ("p" if tab.get("pinned") else " ")
-            group = f"  (group {tab['group']})" if tab.get("group") is not None else ""
-            title = tab.get("title") or ""
-            say(f"  {marks} {tab.get('id')}  {title}  {tab.get('url', '')}{group}")
+        say(f"window {window.get('id')}  {', '.join(flags)}  shows {window.get('profile', '')}")
+    for profile in listing.get("profiles") or []:
+        say("")
+        say(f"{profile.get('name', '')}" + ("  (agent)" if profile.get("kind") == "agent" else ""))
+        for pin in profile.get("pins") or []:
+            folder = f"  [{pin['folder']}]" if pin.get("folder") else ""
+            where = f"{pin['tab']}" if pin.get("tab") else "parked"
+            say(f"  {pin.get('kind', 'pinned'):8}  {where}  {pin.get('title', '')}  {pin.get('url', '')}{folder}")
+        for tab in profile.get("tabs") or []:
+            folder = f"  [{tab['folder']}]" if tab.get("folder") else ""
+            mark = "*" if tab.get("active") else " "
+            say(f"  {mark} {tab.get('id')}  {tab.get('title', '')}  {tab.get('url', '')}  (window {tab.get('window')}){folder}")
     return 0
 
 

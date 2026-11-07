@@ -198,15 +198,16 @@ page engines) can't go in the file; tell the user where they are in Settings ins
 ## Commands and events
 
 Ardia's own commands (new tab, toggle sidebar, select tab 3, split view and the rest of its menus) run with
-`ardia run --session ID`, without CDP, inside your session's profile; commands that would reach past it are refused. `ardia commands` lists them with their variants; `ardia windows` lists the windows and
-their tabs, private windows never included. Prefer these to clicking through a page when the user asks Ardia to do
+`ardia run --session ID`, without CDP, inside your session's profile; commands that would reach past it are refused. `ardia commands` lists them with their variants. `ardia tabs` lists everything open, live and
+without a session: the windows, and every profile with its pins and tabs, each tab with the id `--tab` takes and
+the window `--window` takes; private windows never appear. Prefer these to clicking through a page when the user asks Ardia to do
 something to itself.
 
 ```sh
 ardia commands
 ardia run newTab --session <ID>
 ardia run selectTab 3 --session <ID>
-ardia windows --json
+ardia tabs --json
 ardia events tab.navigated
 ```
 
@@ -247,7 +248,7 @@ without their query and fragment unless the hook says `"fullUrls": true` (`--ful
 into it. `ardia hooks list` checks the file, `ardia hooks install` (ask first) runs the hooks at every login, and
 their output goes to `~/Library/Logs/Ardia/hooks.log`. A hook that calls `ardia run` needs a session too
 (`$ARDIA_SESSION` from the runner's environment, or its own `ardia connect`). Inside `ardia exec` the same is
-`await run(...)` (with `window=` or `tab=`), `await windows()` and `async for e in events(...)`.
+`await run(...)` (with `window=` or `tab=`), `await list_tabs()` and `async for e in events(...)`.
 
 ## Daily reports
 
@@ -256,9 +257,9 @@ yes, ask what they care about most and when they want it, then set it up so it r
 harness's scheduler if it has one, otherwise the system's). Save what you agreed on where the scheduled run can read
 it.
 
-Each report starts from what the user actually uses. `await pinned()` returns their pinned tabs and favorites,
-`await open_tabs()` their open tabs, and `await history()` what they visited recently, across the user's own
-profiles (never agent profiles), whatever profile your session is in. Visit the sites that matter in tabs of your own, using their
+Each report starts from what the user actually uses. `await list_tabs()` returns each profile's pins (favorites
+and pinned tabs) and open tabs, and `await history()` what they visited recently across the user's own profiles
+(never agent profiles), whatever profile your session is in. Skip the profiles whose `kind` is `agent`. Visit the sites that matter in tabs of your own, using their
 logins, and only read: never reply, mark as read, accept or send anything. By default the report covers what's
 pending for them and what changed on things they finished or are waiting on since the last report. Shape it around
 their priorities, keep it short, and deliver it the way they asked. Keep enough state between runs to tell new from

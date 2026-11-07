@@ -39,21 +39,18 @@ In scope:
   tabs           every web page tab (http, https, about, data, blob), plus the ones new_tab opens
   new_tab(url, background=True)   open a tab and return it once the page has loaded
   js(expression, tab=None)        evaluate JavaScript in tab (else the user's tab, else the last new_tab) and return its value
-  await open_tabs(profile=None)
-                 the owner's open tabs from Ardia's saved session, as dicts (url, title, profile, pinned)
-  await pinned() the user's favorites and pinned tabs from Ardia's saved session, as dicts
-                 (title, url, pinned_url, kind favorite|pinned, folder, profile, parked); no incognito
+  await list_tabs(profile=None)
+                 every profile, window, pin and tab, live, with the ids run takes (as ardia tabs --json)
   await history(days=1, limit=200, profile=None, domains=False)
                  recent history per URL, newest first: url, title, visits (in the window), total_visits,
                  last_visit (ISO, local time), profile; domains=True rolls it up per domain.
                  profile is a profile name or its folder under Chromium/ (default: all). Only http(s) pages.
-                 All three read Ardia's data dir (the token path's, or --data-dir/$ARDIA_DATA_DIR), need control on,
-                 and cover the owner's profiles only, never agent profiles or incognito.
+                 It reads Ardia's data dir (the token path's, or --data-dir/$ARDIA_DATA_DIR), needs control on,
+                 and covers the owner's profiles only, never agent profiles or incognito.
   await run(command, arg=None, window=None)   run one of Ardia's commands in the session's profile (see ardia commands);
                                               CommandError if refused, SessionError without a live session
-  await windows()                             Ardia's windows and their tabs
   async for e in events(*names)               Ardia's events as they happen (default: all)
-                 windows() and events() use <data dir>/ArdiaControl.sock, run() the gateway with the session;
+                 list_tabs() and events() use <data dir>/ArdiaControl.sock, run() the gateway with the session;
                  with --port, --ws or $ARDIA_CDP_URL they need --data-dir or $ARDIA_DATA_DIR (run() also
                  --session or $ARDIA_SESSION).
   By, Key, asyncio and pydoll's exports (Tab, WebElement, PageEvent, NetworkEvent, ...)
@@ -79,7 +76,7 @@ Endpoint: --ws, else --port (plain DevTools servers only), else $ARDIA_CDP_URL, 
 """
 MCP_DESCRIPTION = """\
 Serve Ardia to an MCP client over stdio: the same calls as the ardia command, as MCP tools (profiles, connect,
-disconnect, rename, run, commands, windows, wait_for_event, browse, history, pinned, open_tabs). exec isn't one.
+disconnect, rename, run, commands, tabs, wait_for_event, browse, history). exec isn't one.
 
 The server keeps the session: the client calls connect (or the server starts with --session ID or $ARDIA_SESSION),
 and no tool ever returns the token. The agent name the owner sees is connect's agent, else $ARDIA_AGENT, else the
@@ -210,7 +207,7 @@ def main(argv: list[str] | None = None) -> int:
         from ardia_cli import scripts_cli
 
         return scripts_cli.run(args, parser)
-    if args.command in ("run", "commands", "windows", "events", "on", "hooks"):
+    if args.command in ("run", "commands", "tabs", "events", "on", "hooks"):
         from ardia_cli import automation_cli
 
         return automation_cli.dispatch(args, parser)

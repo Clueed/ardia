@@ -1,7 +1,7 @@
 import { automationCommands } from "./automationCommands";
 import { AUTOMATION_EVENTS, MIN_IDLE_SECONDS, NAMED_ONLY_EVENTS, type AutomationEventName } from "./eventNames";
 
-export const PROTOCOL = 2;
+export const PROTOCOL = 3;
 
 export type ErrorCode = "bad_request" | "unknown_method" | "unknown_command" | "refused" | "no_window" | "failed";
 export type MethodError = { code: ErrorCode; message: string };

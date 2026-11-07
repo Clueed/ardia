@@ -493,37 +493,19 @@ class AgentProfiles(Base):
             with self.assertRaises(browsing.BrowsingDataError):
                 browsing.history(self.root, profile=name)
 
-    def test_pinned_skips_agent_profiles(self):
-        rows = browsing.pinned(self.root)
-        self.assertEqual([(row["profile"], row["url"]) for row in rows], [("Me", "https://fav.example/")])
-
-    def test_open_tabs(self):
-        rows = browsing.open_tabs(self.root)
-        self.assertEqual(
-            rows,
-            [
-                {"url": "https://fav.example/", "title": "Fav", "profile": "Me", "pinned": True},
-                {"url": "https://open.example/", "title": "Open", "profile": "Me", "pinned": False},
-                {"url": "https://work.example/", "title": "Mine", "profile": "Work", "pinned": False},
-            ],
-        )
-        self.assertEqual([row["url"] for row in browsing.open_tabs(self.root, profile="Work")], ["https://work.example/"])
-        with self.assertRaises(browsing.BrowsingDataError):
-            browsing.open_tabs(self.root, profile="Bot")
-
-    def test_open_tabs_needs_control(self):
+    def test_history_needs_control(self):
         (self.root / "ArdiaGateway.json").unlink()
         with self.assertRaises(browsing.BrowsingDataError):
-            browsing.open_tabs(self.root)
+            browsing.history(self.root)
         with self.assertRaises(browsing.BrowsingDataError):
-            browsing.open_tabs(None)
+            browsing.history(None)
 
-    def test_open_tabs_refuses_a_symlinked_session(self):
+    def test_history_refuses_a_symlinked_session(self):
         real = self.root / "real.json"
         (self.root / "session.json").rename(real)
         (self.root / "session.json").symlink_to(real)
         with self.assertRaises(browsing.BrowsingDataError):
-            browsing.open_tabs(self.root)
+            browsing.history(self.root)
 
 
 if __name__ == "__main__":

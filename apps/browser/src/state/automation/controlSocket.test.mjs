@@ -41,7 +41,7 @@ function fresh() {
 test("hello, unknown methods and malformed lines", async () => {
   fresh();
   await controlOn();
-  assert.deepEqual(call("hello").result, { app: "Ardia", version: "1.0", protocol: 2 });
+  assert.deepEqual(call("hello").result, { app: "Ardia", version: "1.0", protocol: 3 });
   const unknown = call("dance");
   assert.equal(unknown.error.code, "unknown_method");
   const bad = call(null, null, { raw: "not json" });
@@ -219,4 +219,49 @@ test("same-document navigations in quick succession all arrive, in order", async
     ["https://a.example/#two", true],
     ["https://a.example/next", false],
   ]);
+});
+
+test("tabs lists every profile with its pins once and its tabs, with ids run accepts", async () => {
+  fresh();
+  await controlOn();
+  const personal = S().settings.defaultProfileId;
+  const work = S().createProfile({ name: "Work" });
+  const side = S().createProfile({ name: "Side" });
+  const w = S().createWindow({ url: "https://a.example/" });
+  const pinnedTab = model.activeTabId(S(), w);
+  S().togglePin(pinnedTab);
+  const folderTab = S().newTab(w, { url: "https://b.example/" });
+  S().createGroup([folderTab], { name: "Trip" });
+  S().switchProfile(w, work);
+  const workTab = model.activeTabId(S(), w);
+  S().navigate?.(workTab, "https://w.example/");
+  S().switchProfile(w, personal);
+  const second = S().createWindow({ url: "https://c.example/" });
+  const parkedHolder = S().createWindow({ url: "https://s.example/" });
+  S().switchProfile(parkedHolder, side);
+  S().togglePin(S().newTab(parkedHolder, { url: "https://s.example/" }));
+  S().closeWindow(parkedHolder);
+  S().createWindow({ kind: "private", url: "https://secret.example/" });
+
+  const listing = call("tabs").result;
+  assert.deepEqual(listing.windows.map((x) => x.id).sort(), [w, second].sort());
+  const byName = Object.fromEntries(listing.profiles.map((p) => [p.name, p]));
+  const mine = byName[S().profiles[personal].name];
+  assert.equal(mine.kind, "real");
+  assert.equal(mine.pins.length, 1);
+  assert.deepEqual([mine.pins[0].url, mine.pins[0].title, mine.pins[0].kind], ["https://a.example/", "https://a.example/", "favorite"]);
+  assert.ok(mine.pins[0].tab);
+  const trip = mine.tabs.find((t) => t.url === "https://b.example/");
+  assert.deepEqual([trip.id, trip.window, trip.folder], [folderTab, w, "Trip"]);
+  assert.ok(mine.tabs.some((t) => t.window === second));
+  for (const t of mine.tabs) assert.deepEqual(Object.keys(t).sort(), ["active", "folder", "id", "title", "url", "window"]);
+  assert.ok(byName.Work.tabs.some((t) => t.id === workTab && t.window === w && !t.active));
+  assert.deepEqual(byName.Side.tabs, []);
+  assert.equal(byName.Side.pins.length, 1);
+  assert.deepEqual([byName.Side.pins[0].tab, byName.Side.pins[0].window, byName.Side.pins[0].url], [null, null, "https://s.example/"]);
+  assert.ok(!JSON.stringify(listing).includes("secret"));
+
+  const onlyWork = call("tabs", { profile: "Work" }).result;
+  assert.deepEqual(onlyWork.profiles.map((p) => p.name), ["Work"]);
+  assert.equal(call("tabs", { profile: "Nope" }).error.code, "bad_request");
 });

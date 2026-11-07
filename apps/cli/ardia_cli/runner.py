@@ -274,14 +274,12 @@ def build_namespace(session: Session, filename: str, data_root=None, session_id:
         return await asyncio.to_thread(ardia.run, command, arg, window, tab)
 
     namespace["run"] = run
-    namespace["windows"] = ardia.windows
+    namespace["list_tabs"] = ardia.tabs
     namespace["events"] = ardia.events
     namespace["SessionError"] = SessionError
     namespace["CommandError"] = api.Refused
     namespace["ControlUnreachable"] = api.Unreachable
     namespace["js"] = js
-    namespace["pinned"] = ardia.pinned
-    namespace["open_tabs"] = ardia.open_tabs
     namespace["history"] = ardia.history
     namespace["BrowsingDataError"] = browsing.BrowsingDataError
     namespace["NoPageTab"] = NoPageTab

@@ -223,8 +223,8 @@ class Ardia:
     async def commands(self, timeout=control.CALL_TIMEOUT) -> list:
         return await self._control_call("commands", timeout=timeout)
 
-    async def windows(self) -> list:
-        return await self._control_call("windows")
+    async def tabs(self, profile: str | None = None) -> dict:
+        return await self._control_call("tabs", {"profile": profile} if profile is not None else None)
 
     async def events(self, *names: str, full_urls: bool = False, idle: int | None = None):
         wanted = control.check_events(names) or ["*"]
@@ -244,16 +244,6 @@ class Ardia:
                 yield event
         finally:
             await connection.close()
-
-    async def pinned(self) -> list[dict]:
-        from ardia_cli import browsing
-
-        return await browsing.run_bounded(browsing.pinned, self.root)
-
-    async def open_tabs(self, profile: str | None = None) -> list[dict]:
-        from ardia_cli import browsing
-
-        return await browsing.run_bounded(browsing.open_tabs, self.root, profile=profile)
 
     async def history(self, days: float = 1, limit: int | None = 200, profile: str | None = None, domains: bool = False) -> list[dict]:
         from ardia_cli import browsing

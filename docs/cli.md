@@ -57,9 +57,9 @@ the pins into `pyproject.toml`).
   the New Tab's prewarmed `about:blank`: on the token path every `about:blank` that isn't the active page, on test
   servers the hidden ones),
   `new_tab(url, background=True)` (in the session's profile), `js(expression, tab=None)` (default: `tab`, else the last
-  `new_tab`), `await pinned()`, `await open_tabs(profile=None)`,
+  `new_tab`), `await list_tabs(profile=None)` (as `ardia tabs`),
   `await history(days=1, limit=200, profile=None, domains=False)` (see Browsing data), `await run(command, arg=None,
-  window=None, tab=None)` (through the gateway with the run's session), `await windows()` and `async for e in events(*names)`
+  window=None, tab=None)` (through the gateway with the run's session), and `async for e in events(*names)`
   (over the control socket, no session) (see `docs/automation.md`), `By`, `Key`,
   `asyncio`, pydoll's exports and its common exceptions. It prints the last expression's value. Exit 0 done, 1 the
   code raised or timed out (default 300 s), 2 Ardia can't be reached or closed the browser socket (it watches the
@@ -79,7 +79,7 @@ the pins into `pyproject.toml`).
   profile through the gateway's `/ardia/run` route (see `docs/automation.md`); `--tab` targets one tab without focusing
   it; exit 6 without a live session.
 - `ardia commands` lists the commands `run` takes (see `docs/automation.md`).
-- `ardia windows` lists the windows and their tabs (see `docs/automation.md`).
+- `ardia tabs [--profile NAME] [--json]` lists everything open, live and without a session (see `docs/automation.md`).
 - `ardia events [EVENT…]` streams browser events (see `docs/automation.md`).
 - `ardia on EVENT[,EVENT…] -- PROGRAM` runs a program for each event (see `docs/automation.md`).
 - `ardia hooks run|install|uninstall|list` runs the hooks in `hooks.json`, at login through a LaunchAgent (see
@@ -91,7 +91,7 @@ the pins into `pyproject.toml`).
   command hooks don't run.
 - `ardia --version`, `ardia --help`, `ardia exec --help`, `ardia scripts <command> --help`,
   `ardia config <command> --help`, `ardia theme <command> --help`, `ardia hooks <command> --help` and `--help` on
-  each of `run`, `commands`, `windows`, `events` and `on`.
+  each of `run`, `commands`, `tabs`, `events` and `on`.
 
 `exec` never quits Ardia: it refuses `browser.stop()`, and every WebSocket it opens checks each outgoing message (and
 refuses fragmented sends), so
@@ -105,7 +105,7 @@ ignoring `http_proxy`, `ws_proxy` and the like, so no proxy sees the token.
 `ardia_cli/api.py` is the only layer that talks to Ardia for the session, automation and browsing-data calls. `Ardia(root,
 session)` (or `Ardia.at(data_dir, session)`) has `profiles()`, `connect(name, new, agent, on_waiting, sleep)`,
 `disconnect()`, `rename(name)` and `run(command, arg, window, tab)` over the gateway (blocking), and `commands()`,
-`windows()`, `events(*names, full_urls, idle)`, `history(…)`, `pinned()` and `open_tabs(profile)` over the control socket
+`tabs(profile)`, `events(*names, full_urls, idle)` and `history(…)` over the control socket
 and the data dir (async). They return plain data and raise one family of errors, each with a `kind` and a `code`:
 `Unreachable` (`unreachable`), `OutcomeUnknown` (`outcome_unknown`: the request went out and the connection dropped),
 `SessionGone` (`session`: none given, or it ended), `Refused` (`refused`, `code` is Ardia's, like `name-taken` or
@@ -114,9 +114,8 @@ and the data dir (async). They return plain data and raise one family of errors,
 and `SessionError` still catch them. `connect` withdraws its request (`&cancel=1`) on any exception, Ctrl-C or a signal
 included, and remembers the session it got.
 
-The CLI commands (`profiles`, `connect`, `disconnect`, `rename`, `run`, `commands`, `windows`) call it and only format
-text and map `kind` to exit codes; `exec`'s `run`, `windows`, `events`, `history`, `pinned` and `open_tabs` are its
-methods. `events`, `on` and `hooks` keep their own socket handling (raw lines, drop counts, programs), and `browse` its
+The CLI commands (`profiles`, `connect`, `disconnect`, `rename`, `run`, `commands`, `tabs`) call it and only format
+text and map `kind` to exit codes; `exec`'s `run`, `list_tabs`, `events` and `history` are its methods. `events`, `on` and `hooks` keep their own socket handling (raw lines, drop counts, programs), and `browse` its
 daemon.
 
 ## The MCP server
@@ -124,8 +123,8 @@ daemon.
 `ardia mcp` is a stdio MCP server (JSON-RPC, protocol 2025-06-18, 2025-03-26 or 2024-11-05, whichever the client asks
 for) written on the API, with no MCP library (`ardia_cli/mcp.py`). Add it with `claude mcp add ardia -- ardia mcp` or
 `codex mcp add ardia -- ardia mcp`. Tools: `profiles`, `connect(name, new, agent)`, `disconnect`, `rename(name)`,
-`run(command, arg, window, tab)`, `commands`, `windows`, `wait_for_event(events, timeout ≤ 300 s, full_urls)` (the next
-event, or `{timedOut: true}`), `browse(args)`, `history(days, limit, profile, domains)`, `pinned`, `open_tabs(profile)`.
+`run(command, arg, window, tab)`, `commands`, `tabs(profile)`, `wait_for_event(events, timeout ≤ 300 s, full_urls)` (the next
+event, or `{timedOut: true}`), `browse(args)`, `history(days, limit, profile, domains)`.
 There's no `exec`: a client that can call tools shouldn't get arbitrary Python on the owner's Mac.
 
 - **Session.** The server holds it: from `--session`/`$ARDIA_SESSION` at start, else from `connect`. No tool returns it,
@@ -401,7 +400,8 @@ sha512); from the repo it falls back to `node_modules/axe-core` in a parent fold
 
 ## Browsing data
 
-For daily reports, `exec` has three helpers that read files in Ardia's data dir. They're coroutines that run in a daemon
+For daily reports, `exec` has `history()`, which reads files in Ardia's data dir (pins and open tabs come live
+from `list_tabs()`, see `docs/automation.md`). It's a coroutine that run in a daemon
 thread with one 20 s deadline from the call (the session read, the snapshot, every SQLite connection through a
 progress handler that aborts past it, row fetching capped at 200,000), so the event loop and the browser socket stay
 live (`await history()`; a bare last expression is awaited anyway), `exec --timeout` returns promptly even if a call
@@ -409,21 +409,12 @@ is stuck, and the worker deletes its temp snapshot in its own `finally`. At exit
 (workers check it before making a temp folder and at every backup or copy step), waits up to 1 s for live workers,
 then deletes any temp folder still registered. The data dir is the token path's
 (`--data-dir`, `$ARDIA_DATA_DIR`, else the installed app's); with `--port`, `--ws` or `$ARDIA_CDP_URL` it's only
-`--data-dir` or `$ARDIA_DATA_DIR`, and without one they raise `BrowsingDataError`. All three run the same
-`ArdiaGateway.json` checks as the token path first (regular file, owned, 0600, live pid), so they work only while
-Ardia runs with control on. None reads cookies, passwords, Login Data or Web Data. They cover the owner's real
+`--data-dir` or `$ARDIA_DATA_DIR`, and without one it raises `BrowsingDataError`. It runs the same
+`ArdiaGateway.json` checks as the token path first (regular file, owned, 0600, live pid), so it works only while
+Ardia runs with control on. It reads no cookies, passwords, Login Data or Web Data. It covers the owner's real
 profiles whatever profile the session is in, and skip agent profiles (`session.json` profiles with
-`"kind": "agent"`): their pins, tabs and history never show up.
+`"kind": "agent"`): their history never shows up.
 
-- `await pinned()` reads `<data dir>/session.json` (the app's persisted state, `apps/browser/src/state/session/persist.ts`) and returns
-  one dict per pin: `title` (custom title first), `url` (else the pinned URL), `pinned_url`, `kind` (`favorite` for a
-  tile, `pinned` for a tab in a pinned folder), `folder`, `profile` (its name) and `parked` (pins of a profile no
-  window shows, from `parkedPins`). Pins mirrored across windows count once. Incognito profiles are skipped.
-- `await open_tabs(profile=None)` reads the same `session.json` and returns one dict per open tab, in window and
-  sidebar order: `url` (else the pinned URL; tabs without one are left out), `title` (custom title first), `profile`
-  (its name), `pinned` (a favorite or a tab in a pinned folder). Incognito windows and profiles are skipped; a pin
-  mirrored across windows counts once, other tabs once per id. `profile` is a profile name or id; an unknown or agent
-  one raises `BrowsingDataError` listing the known names. No page is touched.
 - `await history(days=1, limit=200, profile=None, domains=False)` reads Chromium's `History` for each real profile's
   folder under `<data dir>/Chromium/` (`Default` for data id `default`, else `Profile <dataId>`; folders no real
   profile in `session.json` names, agent ones included, are skipped, and without a `profiles` map only `Default` is

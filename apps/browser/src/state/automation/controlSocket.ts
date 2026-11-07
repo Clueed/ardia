@@ -15,6 +15,7 @@ import { noteSocketServing } from "../app/cliControl";
 import { errorText } from "../../lib/errors";
 import { minimizedUrl } from "../../lib/urlParts";
 import { automationWindows } from "./automationWindows";
+import { automationTabs, matchProfile } from "./automationTabs";
 import { TAB_IDLE_EVENTS, USER_IDLE_EVENTS, type AutomationEventName } from "./eventNames";
 import { commands, failure, hello, parseRequest, parseSubscription, SOCKET_RUN_REFUSED, type RequestId, type Subscription } from "./automationMethods";
 import { feedNeeds, stopFeed, updateFeed } from "./automationFeed";
@@ -106,6 +107,16 @@ function subscribe(connection: number, params: Record<string, unknown>): Body {
   return { result: { ok: true, served: served.served, ...(sub.hooks === undefined || sub.hooks === null ? {} : { revisions: served.revisions }) } };
 }
 
+function tabs(params: Record<string, unknown>): Body {
+  const s = useBrowser.getState();
+  const { profile } = params;
+  if (profile === undefined || profile === null) return { result: automationTabs(s) };
+  if (typeof profile !== "string") return failure("bad_request", "profile must be a profile's name.");
+  const id = matchProfile(s, profile);
+  if (!id) return failure("bad_request", `There's no profile named ${JSON.stringify(profile)}.`);
+  return { result: automationTabs(s, id) };
+}
+
 function answer(connection: number, method: string, params: Record<string, unknown>): Body {
   switch (method) {
     case "hello":
@@ -114,6 +125,8 @@ function answer(connection: number, method: string, params: Record<string, unkno
       return { result: commands() };
     case "windows":
       return { result: automationWindows(useBrowser.getState()) };
+    case "tabs":
+      return tabs(params);
     case "subscribe":
       return subscribe(connection, params);
     case "answer": {

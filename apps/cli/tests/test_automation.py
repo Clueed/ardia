@@ -28,19 +28,18 @@ COMMANDS = [
     {"id": "selectTab", "title": "Select Tab", "scope": "window", "variants": ["1", "2", "3"]},
     {"id": "toggleSidebar", "title": "Toggle Sidebar", "scope": "window", "variants": None},
 ]
-WINDOWS = [
-    {
-        "id": 1,
-        "kind": "normal",
-        "focused": True,
-        "profile": "default",
-        "profileName": "Personal",
-        "tabs": [
-            {"id": 11, "url": "https://example.com/", "title": "Example", "profile": "default", "active": True, "pinned": False, "group": None},
-            {"id": 12, "url": "https://news.ycombinator.com/", "title": "HN", "profile": "default", "active": False, "pinned": True, "group": 3},
-        ],
-    }
-]
+TABS = {
+    "windows": [{"id": 1, "kind": "normal", "focused": True, "profile": "Personal"}],
+    "profiles": [
+        {
+            "name": "Personal",
+            "kind": "real",
+            "pins": [{"tab": 12, "window": 1, "title": "HN", "url": "https://news.ycombinator.com/", "pinned_url": "https://news.ycombinator.com/", "kind": "pinned", "folder": "News"}],
+            "tabs": [{"id": 11, "window": 1, "title": "Example", "url": "https://example.com/", "folder": None, "active": True}],
+        },
+        {"name": "Bot", "kind": "agent", "pins": [{"tab": None, "window": None, "title": "P", "url": "https://p.example/", "pinned_url": None, "kind": "favorite", "folder": None}], "tabs": []},
+    ],
+}
 RECORDER = r"""
 import json, os, sys
 out = sys.argv[1]
@@ -136,8 +135,8 @@ class FakeArdia:
             return {"id": ident, "result": {"app": "Ardia", "version": "0.2.44", "protocol": 1}}
         if method == "commands":
             return {"id": ident, "result": COMMANDS}
-        if method == "windows":
-            return {"id": ident, "result": WINDOWS}
+        if method == "tabs":
+            return {"id": ident, "result": TABS}
         if method == "subscribe":
             self.subscriptions[writer] = list(params.get("events", []))
             self.subscribed.set()
@@ -299,7 +298,7 @@ class Base(unittest.TestCase):
 
 class Discovery(Base):
     def test_missing_socket(self):
-        status, _, err = self.run_cli("windows")
+        status, _, err = self.run_cli("tabs")
         self.assertEqual(status, 2)
         self.assertEqual(err.strip(), f"ardia: {endpoint.NOT_REACHABLE}")
 
@@ -313,7 +312,7 @@ class Discovery(Base):
         server = FakeArdia(self.temp / "real.sock").start()
         self.addCleanup(server.stop)
         os.symlink(self.temp / "real.sock", self.socket)
-        status, _, err = self.run_cli("windows")
+        status, _, err = self.run_cli("tabs")
         self.assertEqual(status, 2)
         self.assertIn("isn't a socket", err)
         self.assertEqual(server.requests, [])
@@ -321,18 +320,18 @@ class Discovery(Base):
     def test_other_owner(self):
         self.serve()
         with mock.patch.object(os, "getuid", return_value=os.getuid() + 1):
-            status, _, err = self.run_cli("windows")
+            status, _, err = self.run_cli("tabs")
         self.assertEqual(status, 2)
         self.assertIn("belongs to another user", err)
 
     def test_peer_uid_checked_before_sending(self):
         server = self.serve()
         with mock.patch.object(control, "peer_uid", return_value=os.getuid() + 1):
-            status, _, err = self.run_cli("windows")
+            status, _, err = self.run_cli("tabs")
         self.assertEqual(status, 2)
         self.assertIn("served by another user", err)
         with mock.patch.object(control, "peer_uid", return_value=None):
-            status, _, err = self.run_cli("windows")
+            status, _, err = self.run_cli("tabs")
         self.assertEqual(status, 2)
         self.assertIn("couldn't check who serves it", err)
         self.assertEqual(server.requests, [])
@@ -346,7 +345,7 @@ class Discovery(Base):
 
     def test_long_path(self):
         deep = self.temp / ("x" * 120)
-        status, _, err = self.run_cli("windows", "--data-dir", str(deep))
+        status, _, err = self.run_cli("tabs", "--data-dir", str(deep))
         self.assertEqual(status, 2)
         self.assertIn("over the 103 a Unix socket allows", err)
 
@@ -354,7 +353,7 @@ class Discovery(Base):
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.bind(str(self.socket))
         sock.close()
-        status, _, err = self.run_cli("windows")
+        status, _, err = self.run_cli("tabs")
         self.assertEqual(status, 2)
         self.assertEqual(err.strip(), f"ardia: {endpoint.NOT_REACHABLE}")
 
@@ -377,7 +376,7 @@ class Discovery(Base):
     def test_not_ardia(self):
         server = self.serve()
         server.replies["hello"] = lambda params: {"result": {"app": "Other"}}
-        status, _, err = self.run_cli("windows")
+        status, _, err = self.run_cli("tabs")
         self.assertEqual(status, 2)
         self.assertIn("something other than Ardia", err)
 
@@ -441,33 +440,55 @@ class Methods(Base):
         self.assertIn("may or may not have run", err)
         self.assertEqual(len(gateway.runs), 1)
 
-    def test_commands_and_windows(self):
+    def test_commands_and_tabs(self):
         self.serve()
         status, out, _ = self.run_cli("commands")
         self.assertEqual(status, 0)
         self.assertIn("selectTab      Select Tab  [1, 2, 3]", out)
         status, out, _ = self.run_cli("commands", "--json")
         self.assertEqual(json.loads(out), COMMANDS)
-        status, out, _ = self.run_cli("windows")
-        self.assertEqual(out.splitlines()[0], "window 1  normal, focused  Personal")
-        self.assertIn("*  11  Example  https://example.com/", out)
-        self.assertIn(" p 12  HN  https://news.ycombinator.com/  (group 3)", out)
-        status, out, _ = self.run_cli("windows", "--json")
-        self.assertEqual(json.loads(out), WINDOWS)
+        status, out, _ = self.run_cli("tabs")
+        self.assertEqual(out.splitlines()[0], "window 1  normal, focused  shows Personal")
+        self.assertIn("  * 11  Example  https://example.com/  (window 1)", out)
+        self.assertIn("  pinned    12  HN  https://news.ycombinator.com/  [News]", out)
+        self.assertIn("Bot  (agent)", out)
+        self.assertIn("  favorite  parked  P  https://p.example/", out)
+        status, out, _ = self.run_cli("tabs", "--json")
+        self.assertEqual(json.loads(out), TABS)
+
+    def test_tabs_passes_the_profile_and_reports_refusals(self):
+        server = self.serve()
+        seen = []
+
+        def tabs(params):
+            seen.append(params)
+            if params.get("profile") == "Nope":
+                return {"error": {"code": "bad_request", "message": "There's no profile named \"Nope\"."}}
+            return {"result": {"windows": [], "profiles": [TABS["profiles"][1]]}}
+
+        server.replies["tabs"] = tabs
+        status, out, _ = self.run_cli("tabs", "--profile", "Bot", "--json")
+        self.assertEqual(status, 0)
+        self.assertEqual(json.loads(out)["profiles"], [TABS["profiles"][1]])
+        status, _, err = self.run_cli("tabs", "--profile", "Nope")
+        self.assertEqual(status, 1)
+        self.assertIn("no profile named", err)
+        self.run_cli("tabs")
+        self.assertEqual(seen, [{"profile": "Bot"}, {"profile": "Nope"}, {}])
 
     def test_ignores_null_id_errors_and_unknown_ids(self):
         server = self.serve()
         original = server.answer
 
         def answer(request, writer):
-            if request.get("method") == "windows":
+            if request.get("method") == "tabs":
                 writer.write(b'{"id": null, "error": {"code": "bad_request", "message": "x"}}\n{"id": 999, "result": 1}\n')
             return original(request, writer)
 
         server.answer = answer
-        status, out, _ = self.run_cli("windows", "--json")
+        status, out, _ = self.run_cli("tabs", "--json")
         self.assertEqual(status, 0)
-        self.assertEqual(json.loads(out), WINDOWS)
+        self.assertEqual(json.loads(out), TABS)
 
     def test_reply_timeout(self):
         async def check():
@@ -1134,7 +1155,7 @@ class ExecHelpers(Base):
         namespace = self.namespace(self.data, session=SESSION)
 
         async def check():
-            self.assertEqual(await namespace["windows"](), WINDOWS)
+            self.assertEqual(await namespace["list_tabs"](), TABS)
             self.assertEqual(await namespace["run"]("selectTab", "2", window=1), {"ok": True})
             with self.assertRaises(namespace["CommandError"]) as caught:
                 await namespace["run"]("nope")
@@ -1171,7 +1192,7 @@ class ExecHelpers(Base):
         namespace = self.namespace(None)
 
         async def check():
-            for call in (namespace["windows"](), namespace["run"]("newTab")):
+            for call in (namespace["list_tabs"](), namespace["run"]("newTab")):
                 with self.assertRaises(namespace["ControlUnreachable"]) as caught:
                     await call
                 self.assertIn("needs --data-dir or $ARDIA_DATA_DIR", str(caught.exception))
@@ -1181,7 +1202,7 @@ class ExecHelpers(Base):
 
 class Help(Base):
     def test_help(self):
-        for argv in (["run", "--help"], ["events", "--help"], ["on", "--help"], ["hooks", "--help"], ["hooks", "install", "--help"], ["commands", "--help"], ["windows", "--help"]):
+        for argv in (["run", "--help"], ["events", "--help"], ["on", "--help"], ["hooks", "--help"], ["hooks", "install", "--help"], ["commands", "--help"], ["tabs", "--help"]):
             status, out, _ = self.run_cli(*argv)
             self.assertEqual(status, 0, argv)
             self.assertIn("usage: ardia", out)

@@ -47,7 +47,7 @@ Newline-delimited JSON, UTF-8, one object per line, `\n` terminated.
 - Replies: `{"id": 1, "result": …}` or `{"id": 1, "error": {"code": "…", "message": "…"}}`. A line that isn't a JSON
   object, or has no usable `id`, gets an error with `"id": null` and the connection stays open.
 - Events: `{"event": "tab.opened", "time": 1730400000000, "data": {…}}`, in the order the store changed. Subscribing
-  sends no snapshot; call `windows` for that.
+  sends no snapshot; call `tabs` for that.
 - Decide requests (server to client, protocol 2): `{"decide": "d17", "event": "tab.opening", "hook": "name",
   "revision": "…", "deadline": 250, "time": …, "data": {…}}`, sent only to the connection that serves that hook. The
   client answers with an ordinary request, `{"id": 9, "method": "answer", "params": {"decide": "d17", "answer":
@@ -62,7 +62,7 @@ Error codes: `bad_request`, `unknown_method`, `unknown_command`, `refused`, `no_
 
 ### Who's included
 
-One eligibility rule serves `windows`, events and command targets: a window is eligible when it is a normal browser
+One eligibility rule serves `tabs`, `windows`, events and command targets: a window is eligible when it is a normal browser
 window or Little Ardia, and not private; a tab is eligible when its window is eligible and its profile isn't
 incognito. A tab shown in Peek is not part of its window's tabs and sends no events until it lands in one. Events for
 something that closed are built from the previous snapshot, and only if it was eligible there.
@@ -72,14 +72,24 @@ bookmark searches) and their fixed page title.
 
 ### Methods
 
-- `hello` → `{"app": "Ardia", "version": "0.2.44", "protocol": 2}`. Protocol 2 added `subscribe`'s options,
-  `run`'s `tab`, `answer` and decide requests; protocol 1 clients keep working.
+- `hello` → `{"app": "Ardia", "version": "0.2.44", "protocol": 3}`. Protocol 3 added `tabs`; protocol 2 added
+  `subscribe`'s options, `run`'s `tab`, `answer` and decide requests; older clients keep working.
 - `commands` → `[{"id", "title", "scope", "variants": [ids] | null}]`: the automatable commands. `title` is the menu
   title (else the command bar's, else the id), `scope` is `"page"`, `"window"` or `null`.
 - `run` always answers `refused` ("ardia run needs a session: run ardia connect, then pass --session."), whatever
   its params. Commands run through the gateway instead (below, Running commands with a session), which takes the same
   `command`, `arg`, `window` and `tab`.
-- `windows` → `[{"id", "kind": "normal"|"little", "focused", "profile", "profileName", "tabs": [{"id", "url",
+- `tabs` `{"profile"?: name}` → `{"windows": [{"id", "kind": "normal"|"little", "focused", "profile": name}],
+  "profiles": [{"name", "kind": "real"|"agent", "pins": [{"tab": id|null, "window": id|null, "title", "url",
+  "pinned_url", "kind": "favorite"|"pinned", "folder"}], "tabs": [{"id", "window", "title", "url", "folder",
+  "active"}]}]}` (`automationTabs.ts`). Profiles come in the switcher's order, incognito ones never. Each window keeps
+  its own copy of a profile's pins; `tabs` lists each pin once, with the id of its copy in the most recently focused
+  window. A profile with no pins in any window lists its parked pins, with `tab` and `window` null. `tabs` holds a
+  profile's unpinned tabs in every window, including pages behind a profile swipe; `folder` is the innermost folder's
+  name (a tile's Top Apps folder for a favorite); `active` is the tab on screen in its window. `title` falls back
+  to the URL. An unknown `profile` is `bad_request`. `ardia tabs`, the MCP `tabs` tool and `list_tabs()` in exec
+  call it.
+- `windows` (kept for older clients) → `[{"id", "kind": "normal"|"little", "focused", "profile", "profileName", "tabs": [{"id", "url",
   "title", "profile", "active", "pinned", "group": id|null}]}]`. `active` is the tab in the window's focused pane.
 - `subscribe` `{"events": [names] | ["*"], "fullUrls"?: bool, "idle"?: {"tab"?: [s], "user"?: [s]}, "hooks"?:
   [hook objects]}` → `{"ok": true, "served": [names]}`, then events on that connection until it closes. Calling it
@@ -178,7 +188,7 @@ environment (no `ARDIA_TITLE`, no `ARDIA_URL`) and the runner never logs it.
 - **URLs** are minimized by default: no query, no fragment. A connection (or a hook, `"fullUrls": true`) asks for
   full ones. Internal pages report their redacted URL either way.
 - **Eligibility** is checked when the event is built: nothing from private windows or incognito profiles. Peek
-  events carry the Peek tab, which `windows` leaves out of its window's tabs (it isn't part of the window until it
+  events carry the Peek tab, which `tabs` and `windows` leave out of its window's tabs (it isn't part of the window until it
   lands); a Peek that lands as a tab sends `peek.closed` with `keptAsTab: true` and then `tab.opened`.
 - `tab.navigated` comes from a committed main-frame navigation (the page's commit signal, not a store URL change,
   so a cancelled navigation, showing New Tab or restoring a parked page send nothing). Same-document URL changes
@@ -349,7 +359,7 @@ fails. `run` finds the gateway the same way, through `<data dir>/ArdiaGateway.js
   may or may not have run; a refused connection is the plain exit-2 line. The session token is redacted from
   everything it prints.
 - `ardia commands [--json]` lists command ids, titles and variants.
-- `ardia windows [--json]` prints the windows and their tabs.
+- `ardia tabs [--profile NAME] [--json]` prints the windows, then each profile's pins and tabs with their ids.
 - `ardia events [EVENT…] [--json] [--full-urls] [--idle DURATION]` streams events (default all but the named-only
   ones) until interrupted; `--json` prints the raw lines. Event names are checked against the table above (a typo
   fails with the closest names, exit 1); a lost connection exits 2. `dropped` is reported on stderr in the text
@@ -361,7 +371,7 @@ fails. `run` finds the gateway the same way, through `<data dir>/ArdiaGateway.js
   resolver, so a scratch instance uses its own). `list` shows each hook's kind (`event`, `command`, `decide`,
   `scheduled`, `omnibox`), trigger and action.
 - In `ardia exec`: `await run(command, arg=None, window=None, tab=None)` (through the gateway with exec's session),
-  `await windows()`, and `async for e in events(*names, full_urls=False)` (over the socket). With `--port`, `--ws` or
+  `await list_tabs(profile=None)`, and `async for e in events(*names, full_urls=False)` (over the socket). With `--port`, `--ws` or
   `$ARDIA_CDP_URL` they need `--data-dir` or `$ARDIA_DATA_DIR` and raise without one, so a test browser never drives
   the installed Ardia by accident; there `run` also needs `--session` or `$ARDIA_SESSION`. Errors are `CommandError`
   (`.code`, `.message`), `ControlUnreachable` and `SessionError` (uncaught, it ends exec with exit 6); each call opens
@@ -376,7 +386,7 @@ fails. `run` finds the gateway the same way, through `<data dir>/ArdiaGateway.js
 - A hook that calls `ardia run` needs a session like any other caller: the runner passes its own environment on, so
   `$ARDIA_SESSION` reaches the hook when `ardia on` or `ardia hooks run` was started with it, or the hook runs
   `ardia connect` itself. The LaunchAgent's environment has no session. Sessions end after 30 idle minutes, so a
-  long-lived hooks runner should expect exit 6 and connect again. `windows`, `events` and `commands` need none.
+  long-lived hooks runner should expect exit 6 and connect again. `tabs`, `events` and `commands` need none.
 - PROGRAM runs from argv, never through a shell unless PROGRAM is one; event values are never put into the command
   line. A leading `~` in PROGRAM is expanded, nothing else is.
 - `--match`/`match` take userscript match patterns (`urlmatch.py`); several match if any does; an event without a URL
