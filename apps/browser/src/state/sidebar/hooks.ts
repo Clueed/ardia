@@ -10,7 +10,7 @@ import { folderIn } from "../pins/tileFolders";
 import { useStoreWhile } from "../tabs/tabWatch";
 import { splitOf, splitRowPanes } from "../splits/splits";
 import { downloadsIn } from "../downloads/downloadsSlice";
-import { groupEntries, keptEntry, sidebarEntries } from "./entries";
+import { entryWindow, groupEntries, keptEntry, sidebarEntries } from "./entries";
 import { groupTabIds } from "./groupPanelRows";
 import { capture, type Capture } from "./listCapture";
 import { pinnedCollapsed, pinnedKept } from "./pinnedFold";
@@ -21,6 +21,12 @@ export function useSidebarWidth(windowId: string): number {
   const dragging = useSidebarUi((u) => u.dragWidth[windowId]);
   return dragging ?? saved;
 }
+
+export const useEntryElsewhere = (entry: string, windowId: string) =>
+  useBrowser((s) => {
+    const at = entryWindow(s, entry);
+    return !!at && at !== windowId;
+  });
 
 export const useIsInSplit = (tabId: string) => useBrowser((s) => !!splitOf(s, tabId));
 

@@ -11,6 +11,8 @@ import { tileFolderOf } from "./tileFolders";
 import { syncGroupOrder, withParent } from "../groups/groups";
 import { closedEntries, closeQuietly, keptCleanedTabs, regroupRestored, restoreSnapshots, restoreTarget } from "./closedTabs";
 import { activated, apply, removeTabs } from "../tabs/tabs";
+import { isAgentProfile } from "../browser/agents";
+import { isAgentFolder } from "../windows/agentFolders";
 
 export type ClearedTabs = {
   windowId: string;
@@ -102,11 +104,17 @@ export function noteDeselectedTabs(s: BrowserState, ids: readonly string[], at =
   for (const id of ids) if (s.tabs[id]) deselectedAt.set(id, at);
 }
 
+function agentTabsOf(s: BrowserState): (t: Tab) => boolean {
+  const filed = new Set(Object.values(s.groups).flatMap((g) => (isAgentFolder(g) ? g.tabIds : [])));
+  return (t) => filed.has(t.id) || isAgentProfile(s, t.profileId);
+}
+
 function inactivity(s: BrowserState, windowId: string) {
   const active = activeTabId(s, windowId);
   const grouped = new Set(Object.values(s.groups).flatMap((g) => g.tabIds));
   const inSplit = new Set(Object.values(s.splits).flatMap((v) => splitTabIds(v)));
-  const keep = (t: Tab) => t.id === active || inPinnedContainer(s, t.id) || s.live[t.id]?.playingAudio;
+  const agents = agentTabsOf(s);
+  const keep = (t: Tab) => t.id === active || inPinnedContainer(s, t.id) || s.live[t.id]?.playingAudio || agents(t);
   const used = sharedLastUsed(s);
   return {
     active,
@@ -119,6 +127,7 @@ function inactivity(s: BrowserState, windowId: string) {
 }
 
 export function cleanUpCandidates(s: BrowserState, windowId: string, inactiveForMs = CLEAN_UP_AFTER_MS, now = Date.now()): string[] {
+  if (s.windows[windowId]?.agentSession) return [];
   const view = viewTabIds(s, windowId);
   const { active, inSplit, used, keep, expires, lastUsed } = inactivity(s, windowId);
   const out = new Set<string>();
@@ -142,6 +151,7 @@ export function cleanUpCandidates(s: BrowserState, windowId: string, inactiveFor
 }
 
 export function nextCleanUpAt(s: BrowserState, windowId: string, inactiveForMs: number): number {
+  if (s.windows[windowId]?.agentSession) return Infinity;
   const { expires, lastUsed } = inactivity(s, windowId);
   let next = Infinity;
   for (const id of viewTabIds(s, windowId)) {
@@ -153,12 +163,13 @@ export function nextCleanUpAt(s: BrowserState, windowId: string, inactiveForMs: 
 
 export function abandonedNewTabs(s: BrowserState, windowId: string): string[] {
   const w = s.windows[windowId];
-  if (!w) return [];
+  if (!w || w.agentSession) return [];
+  const agents = agentTabsOf(s);
   const selected = new Set(Object.values(w.activeTabIds));
   const shown = w.activeTabIds[w.profileId];
   const out = w.tabIds.filter((id) => {
     const t = s.tabs[id];
-    return !!t && t.windowId === w.id && !t.url && !hasPage(t) && !t.pin && id !== shown && !selected.has(id);
+    return !!t && t.windowId === w.id && !t.url && !hasPage(t) && !t.pin && id !== shown && !selected.has(id) && !agents(t);
   });
   return out.length >= w.tabIds.length ? out.slice(0, w.tabIds.length - 1) : out;
 }

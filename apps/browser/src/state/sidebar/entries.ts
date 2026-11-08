@@ -5,13 +5,16 @@ import { splitRowPanes, splitTabIds, splitTabIdsOf } from "../splits/splits";
 import { groupIndex, splitIndex, stableList } from "../browser/structure";
 import { tileCells } from "../pins/tileFolders";
 import { entryKey, parseEntry } from "./entryKey";
+import { isRegularWindow } from "../windows/small";
+import { isAgentProfile } from "../browser/agents";
+import { agentFolderOf, agentWindowTabsOf, isAgentFolder, lentFolderTabs } from "../windows/agentFolders";
 
 type SidebarEntries = { tiles: string[]; cells: string[]; pinned: string[]; list: string[] };
 
 const memo = new Map<string, { inputs: unknown[]; result: SidebarEntries }>();
 
 export function sidebarEntries(s: BrowserState, windowId: string, profileId?: string): SidebarEntries {
-  const inputs = [s.tabs, s.windows, s.groups, s.splits, s.settings.newTabOpens];
+  const inputs = [s.tabs, s.windows, s.groups, s.splits, s.settings.newTabOpens, s.settings.newTabPosition, s.profiles];
   const key = profileId ? `${windowId}|${profileId}` : windowId;
   const cached = memo.get(key);
   if (cached && cached.inputs.every((v, i) => v === inputs[i])) return cached.result;
@@ -56,7 +59,25 @@ function computeEntries(s: BrowserState, windowId: string, profileId?: string): 
     if (groupId && s.groups[groupId]!.pinned) pinned.push(entry);
     else list.push(entry);
   }
-  return { tiles, cells: tileCells(s.tabs, tiles), pinned, list };
+  const lent = agentEntries(s, windowId, profileId, rootGroups, splits, seen);
+  const all = s.settings.newTabPosition === "top" ? [...lent, ...list] : [...list, ...lent];
+  return { tiles, cells: tileCells(s.tabs, tiles), pinned, list: all };
+}
+
+function agentEntries(s: BrowserState, windowId: string, profileId: string | undefined, rootGroups: ReturnType<typeof groupIndex>, splits: ReturnType<typeof splitIndex>, seen: Set<string>): string[] {
+  const w = s.windows[windowId];
+  const profile = profileId ?? w?.profileId;
+  if (!isRegularWindow(w) || !profile || isAgentProfile(s, profile)) return [];
+  const out: string[] = [];
+  for (const id of agentWindowTabsOf(s, profile)) {
+    const root = rootGroups.get(id);
+    if (isAgentFolder(root) && agentFolderOf(s, windowId, profile, root.name)) continue;
+    const entry = root ? entryKey("group", root.id) : splitEntry(s, id, splits);
+    if (seen.has(entry)) continue;
+    seen.add(entry);
+    out.push(entry);
+  }
+  return out;
 }
 
 export function numberedTabs(s: BrowserState, windowId: string): string[] {
@@ -74,7 +95,7 @@ export function numberedTabs(s: BrowserState, windowId: string): string[] {
   return [...tiles, ...pinned.flatMap(rowTab), ...list.flatMap(rowTab)];
 }
 
-const groupMemo = new WeakMap<object, { tabs: BrowserState["tabs"]; splits: BrowserState["splits"]; groups: BrowserState["groups"]; result: string[] }>();
+const groupMemo = new WeakMap<object, { tabs: BrowserState["tabs"]; splits: BrowserState["splits"]; groups: BrowserState["groups"]; windows: BrowserState["windows"]; result: string[] }>();
 
 const childIndex = new WeakMap<object, Map<string, BrowserState["groups"][string][]>>();
 const NO_CHILDREN: BrowserState["groups"][string][] = [];
@@ -94,6 +115,14 @@ function childGroups(groups: BrowserState["groups"], parentId: string): BrowserS
   return index.get(parentId) ?? NO_CHILDREN;
 }
 
+export function entryWindow(s: BrowserState, entry: string): string | undefined {
+  const { kind, id } = parseEntry(entry);
+  if (kind === "tab") return s.tabs[id]?.windowId;
+  if (kind === "group") return s.groups[id]?.windowId;
+  if (kind === "split") return s.splits[id]?.windowId;
+  return undefined;
+}
+
 export function keptEntry(s: BrowserState, windowId: string, profileId: string, entries: string[]): string | null {
   const active = activeTabId(s, windowId, profileId);
   if (!active) return null;
@@ -111,13 +140,13 @@ export function groupEntries(s: BrowserState, groupId: string): string[] {
   const g = s.groups[groupId];
   if (!g) return [];
   const cached = groupMemo.get(g);
-  if (cached && cached.tabs === s.tabs && cached.splits === s.splits && cached.groups === s.groups) return cached.result;
+  if (cached && cached.tabs === s.tabs && cached.splits === s.splits && cached.groups === s.groups && cached.windows === s.windows) return cached.result;
   const splits = splitIndex(s.splits);
   const childOf = new Map<string, string>();
   for (const c of childGroups(s.groups, groupId)) for (const id of c.tabIds) childOf.set(id, c.id);
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const id of g.tabIds) {
+  for (const id of [...g.tabIds, ...lentFolderTabs(s, g)]) {
     const child = childOf.get(id);
     const entry = child ? entryKey("group", child) : splitEntry(s, id, splits);
     if (!seen.has(entry)) {
@@ -126,7 +155,7 @@ export function groupEntries(s: BrowserState, groupId: string): string[] {
     }
   }
   const result = stableList(cached?.result, out);
-  groupMemo.set(g, { tabs: s.tabs, splits: s.splits, groups: s.groups, result });
+  groupMemo.set(g, { tabs: s.tabs, splits: s.splits, groups: s.groups, windows: s.windows, result });
   return result;
 }
 

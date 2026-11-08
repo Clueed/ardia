@@ -2,10 +2,12 @@ import type { BrowserState } from "../browser/store";
 import type { BrowserWindow, Tab, TabGroup } from "../browser/types";
 import { useBrowser } from "../browser/store";
 import { activeTabId, inPinnedContainer } from "../browser/model";
-import { isAgentProfile } from "../browser/agents";
+import { isAgentProfile, ownerProfileOf } from "../browser/agents";
 import { isRegularWindow, mainWindowFor } from "./small";
 import { moveTabsInto } from "./windows";
 import { groupTree, regrouped } from "./groupMoves";
+import { orderSections } from "../groups/groups";
+import { AGENT_FOLDER_ICON, agentFolderOf, agentFolderOfTab, isAgentFolder, sameAgentFolder } from "./agentFolders";
 
 type Windows = Pick<BrowserState, "windows">;
 type Placed = Pick<BrowserState, "windows" | "tabs">;
@@ -38,7 +40,13 @@ export function shownByOwner(s: BrowserState, tabId: string): boolean {
   return !!w && !isAgentWindow(w) && shownIn(s, w, tabId);
 }
 
-type Parkable = Pick<BrowserState, "windows" | "windowOrder" | "tabs" | "groups">;
+type Parkable = Pick<BrowserState, "windows" | "windowOrder" | "tabs" | "groups" | "profiles" | "settings" | "profileOrder">;
+
+function asRegularWindow(s: Parkable, w: BrowserWindow): BrowserWindow {
+  const { agentSession: _, ...rest } = w;
+  const regular = { ...rest, sidebarOpen: true, frame: null };
+  return isAgentProfile(s, w.profileId) ? { ...regular, agentsPage: true, ownerProfileId: ownerProfileOf(s, w) } : regular;
+}
 
 export function withAgentWindowsParked<S extends Parkable>(s: S): S {
   const agents = Object.values(s.windows).filter(isAgentWindow);
@@ -46,17 +54,38 @@ export function withAgentWindowsParked<S extends Parkable>(s: S): S {
   const hostId = s.windowOrder.find((id) => isRegularWindow(s.windows[id]));
   const windows = { ...s.windows };
   for (const w of agents) delete windows[w.id];
-  const host = hostId ? windows[hostId] : undefined;
-  if (!host) return { ...s, windows };
-  const moving = new Set(agents.flatMap((w) => w.tabIds));
-  const activeTabIds = { ...agents.reduce<Record<string, string>>((all, w) => ({ ...all, ...w.activeTabIds }), {}), ...host.activeTabIds };
-  windows[host.id] = { ...host, tabIds: [...host.tabIds, ...agents.flatMap((w) => w.tabIds)], activeTabIds };
+  const host = hostId ? windows[hostId]! : asRegularWindow(s, agents[0]!);
+  const guests = agents.filter((w) => w.id !== host.id);
+  const moving = guests.flatMap((w) => w.tabIds);
   const tabs: Record<string, Tab> = { ...s.tabs };
   for (const id of moving) if (tabs[id]) tabs[id] = { ...tabs[id]!, windowId: host.id };
   const agentIds = new Set(agents.map((w) => w.id));
   const groups: Record<string, TabGroup> = {};
-  for (const [id, g] of Object.entries(s.groups)) groups[id] = agentIds.has(g.windowId) ? { ...g, windowId: host.id } : g;
+  for (const [id, g] of Object.entries(s.groups)) if (!agentIds.has(g.windowId)) groups[id] = g;
+  for (const [id, g] of Object.entries(s.groups)) {
+    if (!agentIds.has(g.windowId)) continue;
+    const into = isAgentFolder(g) ? Object.values(groups).find((x) => x.windowId === host.id && sameAgentFolder(x, g)) : undefined;
+    if (into) groups[into.id] = { ...into, tabIds: [...into.tabIds, ...g.tabIds.filter((t) => !into.tabIds.includes(t))] };
+    else groups[id] = { ...g, windowId: host.id };
+  }
+  const activeTabIds = { ...guests.reduce<Record<string, string>>((all, w) => ({ ...all, ...w.activeTabIds }), {}), ...host.activeTabIds };
+  windows[host.id] = { ...host, tabIds: orderSections([...host.tabIds, ...moving], tabs, groups), activeTabIds };
   return { ...s, windows, tabs, groups };
+}
+
+export function fileIntoAgentFolder(tabId: string, agentName: string) {
+  const s = useBrowser.getState();
+  const tab = s.tabs[tabId];
+  if (!tab || tab.pin) return;
+  const folder = agentFolderOf(s, tab.windowId, tab.profileId, agentName);
+  if (folder) s.addTabsToGroup(folder.id, [tabId]);
+  else s.createGroup([tabId], { name: agentName, icon: AGENT_FOLDER_ICON });
+}
+
+function moveKeepingFolder(tabId: string, windowId: string) {
+  const folder = agentFolderOfTab(useBrowser.getState(), tabId)?.name;
+  useBrowser.getState().moveTabsToWindow([tabId], windowId);
+  if (folder !== undefined) fileIntoAgentFolder(tabId, folder);
 }
 
 const borrowed = new Map<string, string>();
@@ -67,7 +96,7 @@ export function showAgentTab(windowId: string, tabId: string): boolean {
   const w = s.windows[windowId];
   if (!home?.agentSession || !w || isAgentWindow(w) || w.kind !== "main") return false;
   borrowed.set(tabId, home.agentSession);
-  s.moveTabsToWindow([tabId], windowId);
+  moveKeepingFolder(tabId, windowId);
   return true;
 }
 
@@ -89,17 +118,29 @@ export function returnBorrowed(liveSessions: ReadonlySet<string>) {
   }
 }
 
+export function returnBorrowedFrom(windowId: string) {
+  const s = useBrowser.getState();
+  for (const [tabId, session] of [...borrowed]) {
+    if (s.tabs[tabId]?.windowId !== windowId) continue;
+    borrowed.delete(tabId);
+    moveIntoAgentWindow(session, tabId);
+  }
+}
+
 export function moveIntoAgentWindow(session: string, tabId: string): string | undefined {
   const s = useBrowser.getState();
   const tab = s.tabs[tabId];
   if (!tab) return undefined;
   const home = agentWindowOf(s, session);
   if (home) {
-    if (tab.windowId !== home) s.moveTabsToWindow([tabId], home);
+    if (tab.windowId !== home) moveKeepingFolder(tabId, home);
     else s.activate(tabId);
     return home;
   }
-  return s.createWindow({ profileId: tab.profileId, tabIds: [tabId], agentSession: session, background: true });
+  const folder = agentFolderOfTab(s, tabId)?.name;
+  const id = s.createWindow({ profileId: tab.profileId, tabIds: [tabId], agentSession: session, background: true });
+  if (folder !== undefined) fileIntoAgentFolder(tabId, folder);
+  return id;
 }
 
 export function wakeIntoAgentWindow(session: string, profileId: string): string | undefined {
@@ -117,22 +158,22 @@ export function parkAgentWindow(id: string) {
   const s = useBrowser.getState();
   const w = s.windows[id];
   if (!w?.agentSession) return;
-  const host = mainWindowFor(s);
-  if (host) {
-    const trees = Object.values(s.groups)
-      .filter((g) => g.windowId === id && !g.pinned && !g.parentId)
-      .map((g) => groupTree(s.groups, g.id));
-    useBrowser.setState(moveTabsInto(s, w.tabIds.filter((t) => !inPinnedContainer(s, t)), host));
-    for (const tree of trees) {
-      const root = tree[0]!;
-      const now = useBrowser.getState();
-      const into = Object.values(now.groups).find(
-        (g) => g.windowId === host && g.profileId === root.profileId && !g.pinned && !g.parentId && g.name === root.name && g.icon === root.icon,
-      );
-      const members = root.tabIds.filter((t) => now.tabs[t]?.windowId === host);
-      if (into) now.addTabsToGroup(into.id, members);
-      else useBrowser.setState(regrouped(now, tree, host, root.profileId, false));
-    }
+  const parking = w.tabIds.filter((t) => !inPinnedContainer(s, t));
+  const trees = Object.values(s.groups)
+    .filter((g) => g.windowId === id && !g.pinned && !g.parentId)
+    .map((g) => groupTree(s.groups, g.id));
+  let host = mainWindowFor(s);
+  if (host) useBrowser.setState(moveTabsInto(s, parking, host));
+  else if (parking.length) host = s.createWindow({ profileId: isAgentProfile(s, w.profileId) ? undefined : w.profileId, tabIds: parking, background: true });
+  for (const tree of host ? trees : []) {
+    const root = tree[0]!;
+    const now = useBrowser.getState();
+    const into = Object.values(now.groups).find(
+      (g) => g.windowId === host && g.profileId === root.profileId && !g.pinned && !g.parentId && g.name === root.name && g.icon === root.icon,
+    );
+    const members = root.tabIds.filter((t) => now.tabs[t]?.windowId === host);
+    if (into) now.addTabsToGroup(into.id, members);
+    else useBrowser.setState(regrouped(now, tree, host!, root.profileId, false));
   }
   useBrowser.getState().closeWindow(id);
 }

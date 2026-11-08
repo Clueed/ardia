@@ -3,15 +3,15 @@ import { Animated, Pressable, View } from "react-native";
 import { useTheme } from "../ui/theme";
 import { useGroup, usePageProfileId, useWindowId } from "../../state/browser/hooks";
 import { updateGroup } from "../../state/groups/actions";
-import { useGroupLabel } from "../../state/groups/hooks";
+import { useAgentWorkingIn, useGroupLabel } from "../../state/groups/hooks";
 import { useSelectionInGroup } from "../../state/pins/hooks";
 import { newCapture } from "../../state/sidebar/listCapture";
-import { useCapturedGroupEntries, useGroupFirstTabIcon, useGroupTabIds, useKeptEntry } from "../../state/sidebar/hooks";
+import { useCapturedGroupEntries, useEntryElsewhere, useGroupFirstTabIcon, useGroupTabIds, useKeptEntry } from "../../state/sidebar/hooks";
 import { MeetingTimeLabel, useMeetingCountdown } from "../live/MeetingCountdown";
 import { HoverSlot } from "../ui/HoverSlot";
-import { Button, ContextMenuArea, FadeLabel, font, ink, space, Symbol, Text, weight, withAlpha } from "../ui";
+import { Button, ContextMenuArea, Dot, FadeLabel, font, ink, space, Symbol, Text, weight, withAlpha } from "../ui";
 import { commitRename, endRename, startRename } from "../../state/sidebar/actions";
-import { useDragFolded, useDragItem, useDropInto } from "./DragProvider";
+import { DragScope, useDragFolded, useDragItem, useDropInto } from "./DragProvider";
 import { useShift, type EntryMotion } from "./EntryMotion";
 import { Fold, useFold } from "./Fold";
 import { GROUP_BORDER, GROUP_INNER_RADIUS, GROUP_INDENT, GROUP_RADIUS } from "./geometry";
@@ -161,14 +161,44 @@ export const SidebarEntry = memo(function SidebarEntry({
   motion?: EntryMotion | null;
 }) {
   const windowId = useWindowId();
+  const elsewhere = useEntryElsewhere(entry, windowId);
+  const { kind, id } = parseEntry(entry);
+  if (elsewhere) {
+    return (
+      <DragScope enabled={false}>
+        <WindowEntry entry={entry} section={section} rowSection={rowSection} parentGroup={parentGroup} lastInBox={lastInBox} motion={motion} />
+      </DragScope>
+    );
+  }
+  return <WindowEntry entry={entry} section={section} rowSection={rowSection} parentGroup={parentGroup} lastInBox={lastInBox} motion={motion} />;
+});
+
+function WindowEntry({
+  entry,
+  section,
+  rowSection = section,
+  parentGroup,
+  lastInBox = false,
+  motion = null,
+}: {
+  entry: string;
+  section: "list" | "pinnedGroups";
+  rowSection?: RowSection;
+  parentGroup?: string;
+  lastInBox?: boolean;
+  motion?: EntryMotion | null;
+}) {
+  const windowId = useWindowId();
   const { kind, id } = parseEntry(entry);
   if (kind === "live") return <LiveFolderBlock folderId={id} windowId={windowId} />;
   if (kind === "group") return <GroupBlock groupId={id} section={section} parentGroup={parentGroup} motion={motion} />;
   if (kind === "split") return <SplitRowItem splitId={id} section={rowSection} parentGroup={parentGroup} lastInBox={lastInBox} motion={motion} />;
   return <TabRowItem tabId={id} section={rowSection} parentGroup={parentGroup} lastInBox={lastInBox} motion={motion} />;
-});
+}
 
 const MEASURE_LABEL = { opacity: 0, fontVariant: TABULAR_NUMS } as const;
+const AGENT_DOT_SIZE = 7;
+const AGENT_DOT = { marginRight: space.s } as const;
 
 function GroupHeader({ groupId, windowId, collapsed, open }: { groupId: string; windowId: string; collapsed: boolean; open: Animated.Value }) {
   const theme = useTheme();
@@ -180,6 +210,7 @@ function GroupHeader({ groupId, windowId, collapsed, open }: { groupId: string; 
   const dropInto = useDropInto() === groupId;
   const { hovered, hoverProps } = useRowHover(windowId, collapsed && !renaming ? { kind: "group", id: groupId } : null);
   const countdown = useMeetingCountdown(groupId);
+  const agentWorking = useAgentWorkingIn(groupId);
   const closeControl = useGroupCloseControlWhile(groupId, hovered && !renaming);
   if (!group) return null;
   const target = { kind: "group" as const, id: groupId };
@@ -222,6 +253,11 @@ function GroupHeader({ groupId, windowId, collapsed, open }: { groupId: string; 
                     <FadeLabel text={label} fontSize={font.body.fontSize} weight="medium" color={tokens.groupTitle} style={{ position: "absolute", left: 0, right: 0, top: 0, height: TAB_ROW.titleHeight }} />
                   </View>
                   <SharedFolderMark groupId={groupId} />
+                  {agentWorking ? (
+                    <View accessibilityLabel="Connected" style={AGENT_DOT}>
+                      <Dot size={AGENT_DOT_SIZE} color={theme.success} />
+                    </View>
+                  ) : null}
                   <Animated.View
                     style={{
                       width: 10,

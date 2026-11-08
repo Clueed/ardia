@@ -6,7 +6,8 @@ const { cliProfiles, sessionsChanged, useCliConnect } = await import("../app/cli
 const { PROFILE_WAKE_LIMIT, wakeProfileTabs } = await import("../tabs/recentTabWarmup.ts");
 const { extensionsProfileId } = await import("../extensions/store.ts");
 const { originalProfile } = await import("../windows/small.ts");
-const { AGENT_FOLDER_ICON, OWNER_TAB, activateGatewayTab, agentSessionsChanged, closeGatewayTab, openGatewayTab, shownTabsByProfile } = await import("../app/gatewayTabs.ts");
+const { AGENT_FOLDER_ICON } = await import("../windows/agentFolders.ts");
+const { OWNER_TAB, activateGatewayTab, agentSessionsChanged, closeGatewayTab, openGatewayTab, shownTabsByProfile } = await import("../app/gatewayTabs.ts");
 
 const S = () => useBrowser.getState();
 const PERSONAL = { id: "default", name: "Personal", color: "plum", icon: null, createdAt: 0 };

@@ -36,7 +36,7 @@ function rowFlags(s: BrowserState, windowId: string, tabId: string): number {
   const tab = s.tabs[tabId];
   const live = s.live[tabId];
   let flags = iconMarks(s, tabId);
-  if (tab && activeTabId(s, tab.windowId, tab.profileId) === tabId && (!isAgentProfile(s, tab.profileId) || s.windows[tab.windowId]?.profileId === tab.profileId)) flags |= ACTIVE;
+  if (tab && activeTabId(s, tab.windowId, tab.profileId) === tabId && (isAgentProfile(s, tab.profileId) ? s.windows[tab.windowId]?.profileId === tab.profileId : tab.windowId === windowId)) flags |= ACTIVE;
   if (s.selection[windowId]?.includes(tabId)) flags |= SELECTED;
   if (live?.playingAudio) flags |= PLAYING;
   if (live?.isLoading) flags |= LOADING;

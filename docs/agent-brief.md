@@ -148,11 +148,15 @@ Engine files are in `engine/ardiacore/src/ardia/core`, app files in `packages/ar
   acts out occlusion as visible (pages render and run rAF at 1280x800) and acts out page fullscreen without resizing.
   Its tabs play sound but are kept out of Now Playing and auto-PiP, and a permission prompt from one is denied in an agent
   profile and queued for the owner, with a notification, in a real profile. Popups and target=_blank from them stay
-  in it. When the owner clicks one of its tabs (the Agents page, a folder, a notification), the tab moves into the
-  owner's window, same target and CDP session, and moves back once the owner shows another tab. When the session
-  ends the window closes and its tabs park in the owner's window (in the agent's folder for a real profile);
-  `doc.json` always saves them parked, so a relaunch never restores an agent window. Drive one in a dev instance
-  with `ac.agentWindows` (with `clickTab`).
+  in it. In a real profile its live tabs show in the owner's sidebar while the session runs, inside the agent's
+  folder (`state/windows/agentFolders.ts`; `agentEntries` and `lentFolderTabs` in `state/sidebar/entries.ts`), in
+  every regular window when tabs are shared, with a green dot on the folder. They are rows only: the records stay
+  in the agent window. When the owner clicks one of its tabs (the Agents page, a folder, a notification), the tab moves into the
+  owner's window, same target and CDP session, keeping its folder, and moves back once the owner shows another tab or
+  closes that window. When the session ends the window closes and its tabs park in the owner's window (in the agent's
+  folder for a real profile), or in a new background window when no regular window is open. Nothing closes an
+  agent's tab on its own: tab clean-up and abandoned new tabs skip them. `doc.json` always saves them parked, so a
+  relaunch never restores an agent window. Drive one in a dev instance with `ac.agentWindows` (with `clickTab`).
 - **The CLI gateway** (`packages/ardiacore/ios/Gateway*.swift`, the `ArdiaGateway` module; JS `state/app/cliConnect.ts`,
   `gatewayTabs.ts`): with control on, the app serves the `ardia` command on its own 127.0.0.1 port
   (`<data dir>/ArdiaGateway.json`) and proxies each session's sockets to the engine's token server, narrowed to the

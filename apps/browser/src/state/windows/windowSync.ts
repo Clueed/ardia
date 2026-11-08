@@ -4,6 +4,7 @@ import type { BrowserState } from "../browser/store";
 import { engineProfile, windowTitle } from "../browser/model";
 import { windowOpens } from "./windowOpenOrder";
 import { focusedWindowOf } from "./ui";
+import { parkAgentWindow, returnBorrowedFrom } from "./agentWindows";
 import { adoptOf } from "../tabs/pageSession";
 
 export type LightsCenter = LightsPlace | null;
@@ -43,7 +44,11 @@ export function createWindowSync({ port, getState, isQuitting, lightsCenter, isU
       if (e.type === "close") {
         if (isQuitting()) return;
         open.delete(e.id);
-        s.closeWindow(e.id);
+        if (s.windows[e.id]?.agentSession) parkAgentWindow(e.id);
+        else {
+          returnBorrowedFrom(e.id);
+          getState().closeWindow(e.id);
+        }
         releaseIfIncognito(s.windows[e.id]);
       }
     });

@@ -1,7 +1,8 @@
 import { discardOffered, type OpenWindowRequest } from "../../platform/tabs";
 import { openWindow } from "../browser/actions";
 import { useBrowser, type BrowserState } from "../browser/store";
-import { agentWindowOf, borrowedBy, isAgentWindow } from "../windows/agentWindows";
+import { agentWindowOf, borrowedBy, fileIntoAgentFolder, isAgentWindow } from "../windows/agentWindows";
+import { agentFolderOfTab } from "../windows/agentFolders";
 import { engineProfile } from "../browser/model";
 import { isAgentProfile } from "../browser/agents";
 import { peekSourceOf } from "../peek/peek";
@@ -56,7 +57,10 @@ function openNow(request: OpenWindowRequest, page: PageRef, gated: boolean) {
   }
   const agentHome = agentHomeOf(s, w.id, page.tabId);
   if (agentHome && disposition !== "incognito") {
-    return void s.newTab(agentHome, { url, adoptId, openerId: page.tabId, profileId: page.profileId, background: disposition === "background", gated });
+    const folder = page.tabId ? agentFolderOfTab(s, page.tabId)?.name : undefined;
+    const opened = s.newTab(agentHome, { url, adoptId, openerId: page.tabId, profileId: page.profileId, background: disposition === "background", gated });
+    if (opened && folder !== undefined) fileIntoAgentFolder(opened, folder);
+    return;
   }
   if (disposition === "peek") {
     if (page.tabId) s.openPeek(page.tabId, url, point ?? null);
