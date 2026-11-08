@@ -37,10 +37,7 @@ export function isSiteMuted(s: SiteMutes, tab: Omit<MutedTab, "muted">): boolean
 
 export const muteState = (s: SiteMutes, tab: MutedTab): MuteState => (isSiteMuted(s, tab) ? "site" : tab.muted ? "tab" : null);
 
-const inAgentWindow = (s: SiteMutes & Partial<Pick<BrowserState, "windows">>, tab: MutedTab) => !!s.windows?.[tab.windowId]?.agentSession;
-
-export const isSilenced = (s: SiteMutes & Partial<Pick<BrowserState, "windows">>, tab: MutedTab): boolean =>
-  tab.muted || isSiteMuted(s, tab) || inAgentWindow(s, tab);
+export const isSilenced = (s: SiteMutes, tab: MutedTab): boolean => tab.muted || isSiteMuted(s, tab);
 
 export function muteTitle(state: MuteState): string {
   if (state === "site") return "Unmute Site";

@@ -103,13 +103,3 @@ test("a saved session's site-wide mutes stop being tab mutes, other tab mutes st
   assert.equal(migrated.parkedPins.default.tabs[0].muted, false, "a parked pin");
   assert.equal(sessionWithOwnTabMutes({ settings: {}, tabs: doc.tabs }).tabs, doc.tabs);
 });
-
-test("an agent window's tabs stay silent until the owner shows one in a window of theirs", () => {
-  const { w } = setup();
-  const agentWindow = S().createWindow({ url: "https://agent.example/", agentSession: "s1", background: true });
-  const tab = S().windows[agentWindow].tabIds[0];
-  assert.equal(silent(tab), true);
-  assert.equal(state(tab), null, "the tab's own mute is untouched");
-  S().moveTabsToWindow([tab], w);
-  assert.equal(silent(tab), false);
-});

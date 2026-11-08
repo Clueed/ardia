@@ -24,7 +24,7 @@ export function startSidebarEffects() {
     for (const id of sitesChanged ? Object.keys(s.tabs) : changedIds(s.tabs, prev.tabs)) {
       const tab = s.tabs[id];
       const was = prev.tabs[id];
-      if (!tab || !was || (!sitesChanged && tab.url === was.url && tab.muted === was.muted && tab.windowId === was.windowId)) continue;
+      if (!tab || !was || (!sitesChanged && tab.url === was.url && tab.muted === was.muted)) continue;
       const silenced = isSilenced(s, tab);
       if (silenced !== isSilenced(prev, was)) void webviews.get(id)?.setMuted(silenced);
     }

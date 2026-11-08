@@ -146,7 +146,7 @@ Engine files are in `engine/ardiacore/src/ardia/core`, app files in `packages/ar
   (pinned sync, pin mirroring, the owner's window picks), and `setFocusedWindow` ignores it, so it never leads focus order. Natively
   it sits 200 pt beyond every screen at the lowest level, can't become key or main, orders back instead of front,
   acts out occlusion as visible (pages render and run rAF at 1280x800) and acts out page fullscreen without resizing.
-  Its tabs are muted, kept out of Now Playing and auto-PiP, and a permission prompt from one is denied in an agent
+  Its tabs play sound but are kept out of Now Playing and auto-PiP, and a permission prompt from one is denied in an agent
   profile and queued for the owner, with a notification, in a real profile. Popups and target=_blank from them stay
   in it. When the owner clicks one of its tabs (the Agents page, a folder, a notification), the tab moves into the
   owner's window, same target and CDP session, and moves back once the owner shows another tab. When the session
